@@ -58,6 +58,9 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # The generated client is not committed (see .gitignore), so it has to be
+      # built here before anything imports it.
+      - run: npx prisma generate
       - run: npx prisma migrate deploy
       - run: npm test -- --coverage
 

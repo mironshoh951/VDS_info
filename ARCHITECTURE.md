@@ -4,20 +4,20 @@
 **Version:** 1.0
 **Scope:** Corporate platform + CMS + product/partner/brand directories + events + publishing + resource centre + multilingual system + secure administration + AI assistants + search + leads + analytics + SEO + security/audit.
 
-> **Naming note.** Throughout this document the product is referred to as *the Platform*. All company-specific names, figures, certifications, partners and claims are **content**, not code — they are entered through the CMS. Nothing in this architecture fabricates business facts.
+> **Naming note.** Throughout this document the product is referred to as _the Platform_. All company-specific names, figures, certifications, partners and claims are **content**, not code — they are entered through the CMS. Nothing in this architecture fabricates business facts.
 
 ---
 
 ## 0. Decisions locked before design
 
-| # | Decision | Choice | Rationale |
-|---|---|---|---|
-| D1 | Repository location | Connected folder on the owner's machine | Source of truth stays with the business. |
-| D2 | Deployment target | Docker on a VPS/dedicated server | Required for a real background worker tier, Redis, object storage and predictable cost. Vercel-compatible fallback retained. |
-| D3 | AI provider | Provider-agnostic adapter with **Anthropic** and **OpenAI** implementations, selectable per task from admin settings | No vendor lock-in; embeddings and chat can come from different vendors. |
-| D4 | Admin separation | Separate subdomain `admin.<domain>` with host-scoped cookies and separate middleware; env-switchable to a path in local dev | Strongest practical isolation without a second codebase. |
-| D5 | Languages | Exactly four: `uz`, `ru`, `en`, `zh`. Default configurable at runtime | Per requirement. Locale table is data, so a fifth locale is a row, not a release. |
-| D6 | Roles | Exactly two: `SUPER_ADMIN`, `VIEWER` | Per requirement. Permission *capabilities* are modelled explicitly so a third role is additive, not a rewrite. |
+| #   | Decision            | Choice                                                                                                                      | Rationale                                                                                                                    |
+| --- | ------------------- | --------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| D1  | Repository location | Connected folder on the owner's machine                                                                                     | Source of truth stays with the business.                                                                                     |
+| D2  | Deployment target   | Docker on a VPS/dedicated server                                                                                            | Required for a real background worker tier, Redis, object storage and predictable cost. Vercel-compatible fallback retained. |
+| D3  | AI provider         | Provider-agnostic adapter with **Anthropic** and **OpenAI** implementations, selectable per task from admin settings        | No vendor lock-in; embeddings and chat can come from different vendors.                                                      |
+| D4  | Admin separation    | Separate subdomain `admin.<domain>` with host-scoped cookies and separate middleware; env-switchable to a path in local dev | Strongest practical isolation without a second codebase.                                                                     |
+| D5  | Languages           | Exactly four: `uz`, `ru`, `en`, `zh`. Default configurable at runtime                                                       | Per requirement. Locale table is data, so a fifth locale is a row, not a release.                                            |
+| D6  | Roles               | Exactly two: `SUPER_ADMIN`, `VIEWER`                                                                                        | Per requirement. Permission _capabilities_ are modelled explicitly so a third role is additive, not a rewrite.               |
 
 ---
 
@@ -88,20 +88,20 @@ components/          ← presentational + composite UI
 
 **Hard rules enforced by lint boundaries:**
 
-1. `app/**` may import from `server/modules/**` *facades* only — never a Prisma model directly.
+1. `app/**` may import from `server/modules/**` _facades_ only — never a Prisma model directly.
 2. `components/**` may never import from `server/**`.
 3. Every mutation passes through a use-case in `server/modules/**` that begins with an authorization check. There is no path from an HTTP handler to the database that skips it.
 4. `lib/**` has no dependency on `server/**`.
 
 ### 1.3 Rendering strategy
 
-| Surface | Strategy | Cache |
-|---|---|---|
-| Public pages, product/partner/brand/service/event/article detail | SSR + ISR with tag-based revalidation | `revalidateTag('product:<id>')` on mutation |
-| Public listings with filters | SSR, Redis-cached query results (60 s) | Invalidated by entity tags |
-| Global search | SSR, Postgres FTS, no ISR | Short Redis cache on hot terms |
-| Admin | SSR, `Cache-Control: no-store`, dynamic always | None |
-| API | Route handlers, explicit cache headers | Per-endpoint |
+| Surface                                                          | Strategy                                       | Cache                                       |
+| ---------------------------------------------------------------- | ---------------------------------------------- | ------------------------------------------- |
+| Public pages, product/partner/brand/service/event/article detail | SSR + ISR with tag-based revalidation          | `revalidateTag('product:<id>')` on mutation |
+| Public listings with filters                                     | SSR, Redis-cached query results (60 s)         | Invalidated by entity tags                  |
+| Global search                                                    | SSR, Postgres FTS, no ISR                      | Short Redis cache on hot terms              |
+| Admin                                                            | SSR, `Cache-Control: no-store`, dynamic always | None                                        |
+| API                                                              | Route handlers, explicit cache headers         | Per-endpoint                                |
 
 Publishing a record triggers `revalidateTag` for the entity, its listing, the sitemap and the search index — so "publish" is genuinely visible within seconds without a rebuild.
 
@@ -109,26 +109,26 @@ Publishing a record triggers `revalidateTag` for the entity, its listing, the si
 
 ## 2. Technology stack and reasoning
 
-| Layer | Choice | Why this and not the alternative |
-|---|---|---|
-| Framework | **Next.js 15 (App Router), React 19** | One codebase serves SSR public pages (needed for SEO + Core Web Vitals) and an authenticated admin SPA-like shell. Server Components keep the data layer off the client, which also removes a whole class of authorization leaks. Alternative (separate SPA + NestJS API) doubles deployment and duplicates auth for no gain at this scale. |
-| Language | **TypeScript, `strict: true`, `noUncheckedIndexedAccess`** | Contract safety across 60+ entities. `any` is lint-banned except in typed escape hatches. |
-| Styling | **Tailwind CSS v4 + CSS custom properties as design tokens** | Tokens live in CSS variables so a future theme/brand change is a token swap, not a component rewrite. Avoids runtime CSS-in-JS cost. |
-| UI primitives | **Radix UI primitives + in-house component layer** | Accessible dialog/menu/tabs/combobox behaviour (focus trap, ARIA, keyboard) is the hardest part of §57 to get right by hand. We own the visual layer; Radix owns the behaviour. No opinionated template kit. |
-| ORM | **Prisma 6** | Typed client, first-class migrations, relation modelling that matches this domain. A Prisma client extension gives us global soft-delete filtering and audit hooks in one place. Raw SQL via `$queryRaw` where Prisma is the wrong tool (FTS ranking, vector search). |
-| Database | **PostgreSQL 16 + `pgvector` + `pg_trgm` + `unaccent`** | One engine for relational data, full-text search *and* RAG embeddings. Removes Elasticsearch and a separate vector DB from the stack — two fewer services to secure, back up and pay for. `pg_trgm` provides typo tolerance; `unaccent` + language-specific configs handle ru/uz; Chinese is handled with bigram indexing (see §7.4). |
-| Cache/queue | **Redis 7 + BullMQ** | Queue, rate-limit counters, session revocation list, cached listings. Mature, operable, no cloud dependency. |
-| Object storage | **S3-compatible (MinIO in dev/self-host, any S3 in cloud)** | Media never touches the app container's disk; presigned uploads keep large files off the app tier. |
-| Auth | **Custom session auth: Argon2id + opaque server-side sessions in Postgres, mirrored revocation in Redis** | Requirement §65 (list/revoke sessions), §7 (step-up re-auth) and §6 (throttling, MFA) all need server-side session state. JWTs cannot be revoked; NextAuth's abstractions fight step-up re-authentication. ~400 lines of well-tested code, fully under our control. |
-| MFA | **TOTP (RFC 6238) + single-use recovery codes** | Works offline, no SMS cost, no third party holding a factor. |
-| Validation | **Zod** schemas shared between client form and server handler | One definition, enforced server-side regardless of the client. |
-| Email | **Nodemailer with SMTP + React Email templates** | Provider-agnostic; works with any transactional provider the company already owns. |
-| AI | **Adapter interface + Anthropic and OpenAI implementations** | §83 explicitly forbids provider coupling. Adapter covers `chat`, `stream`, `embed`, `countTokens`. |
-| Testing | **Vitest** (unit/integration), **Supertest-style route tests**, **Playwright** (E2E) | Vitest for speed with TS/ESM; Playwright for the §70 critical scenarios including auth, step-up and upload validation. |
-| Observability | **Pino structured logs + OpenTelemetry traces + Sentry-compatible error sink** | Vendor-neutral; the OTLP endpoint is configuration. |
-| Container | **Docker multi-stage + docker-compose; GitHub Actions CI** | Reproducible builds, one image for `web` and `worker`. |
+| Layer          | Choice                                                                                                    | Why this and not the alternative                                                                                                                                                                                                                                                                                                            |
+| -------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Framework      | **Next.js 15 (App Router), React 19**                                                                     | One codebase serves SSR public pages (needed for SEO + Core Web Vitals) and an authenticated admin SPA-like shell. Server Components keep the data layer off the client, which also removes a whole class of authorization leaks. Alternative (separate SPA + NestJS API) doubles deployment and duplicates auth for no gain at this scale. |
+| Language       | **TypeScript, `strict: true`, `noUncheckedIndexedAccess`**                                                | Contract safety across 60+ entities. `any` is lint-banned except in typed escape hatches.                                                                                                                                                                                                                                                   |
+| Styling        | **Tailwind CSS v4 + CSS custom properties as design tokens**                                              | Tokens live in CSS variables so a future theme/brand change is a token swap, not a component rewrite. Avoids runtime CSS-in-JS cost.                                                                                                                                                                                                        |
+| UI primitives  | **Radix UI primitives + in-house component layer**                                                        | Accessible dialog/menu/tabs/combobox behaviour (focus trap, ARIA, keyboard) is the hardest part of §57 to get right by hand. We own the visual layer; Radix owns the behaviour. No opinionated template kit.                                                                                                                                |
+| ORM            | **Prisma 6**                                                                                              | Typed client, first-class migrations, relation modelling that matches this domain. A Prisma client extension gives us global soft-delete filtering and audit hooks in one place. Raw SQL via `$queryRaw` where Prisma is the wrong tool (FTS ranking, vector search).                                                                       |
+| Database       | **PostgreSQL 16 + `pgvector` + `pg_trgm` + `unaccent`**                                                   | One engine for relational data, full-text search _and_ RAG embeddings. Removes Elasticsearch and a separate vector DB from the stack — two fewer services to secure, back up and pay for. `pg_trgm` provides typo tolerance; `unaccent` + language-specific configs handle ru/uz; Chinese is handled with bigram indexing (see §7.4).       |
+| Cache/queue    | **Redis 7 + BullMQ**                                                                                      | Queue, rate-limit counters, session revocation list, cached listings. Mature, operable, no cloud dependency.                                                                                                                                                                                                                                |
+| Object storage | **S3-compatible (MinIO in dev/self-host, any S3 in cloud)**                                               | Media never touches the app container's disk; presigned uploads keep large files off the app tier.                                                                                                                                                                                                                                          |
+| Auth           | **Custom session auth: Argon2id + opaque server-side sessions in Postgres, mirrored revocation in Redis** | Requirement §65 (list/revoke sessions), §7 (step-up re-auth) and §6 (throttling, MFA) all need server-side session state. JWTs cannot be revoked; NextAuth's abstractions fight step-up re-authentication. ~400 lines of well-tested code, fully under our control.                                                                         |
+| MFA            | **TOTP (RFC 6238) + single-use recovery codes**                                                           | Works offline, no SMS cost, no third party holding a factor.                                                                                                                                                                                                                                                                                |
+| Validation     | **Zod** schemas shared between client form and server handler                                             | One definition, enforced server-side regardless of the client.                                                                                                                                                                                                                                                                              |
+| Email          | **Nodemailer with SMTP + React Email templates**                                                          | Provider-agnostic; works with any transactional provider the company already owns.                                                                                                                                                                                                                                                          |
+| AI             | **Adapter interface + Anthropic and OpenAI implementations**                                              | §83 explicitly forbids provider coupling. Adapter covers `chat`, `stream`, `embed`, `countTokens`.                                                                                                                                                                                                                                          |
+| Testing        | **Vitest** (unit/integration), **Supertest-style route tests**, **Playwright** (E2E)                      | Vitest for speed with TS/ESM; Playwright for the §70 critical scenarios including auth, step-up and upload validation.                                                                                                                                                                                                                      |
+| Observability  | **Pino structured logs + OpenTelemetry traces + Sentry-compatible error sink**                            | Vendor-neutral; the OTLP endpoint is configuration.                                                                                                                                                                                                                                                                                         |
+| Container      | **Docker multi-stage + docker-compose; GitHub Actions CI**                                                | Reproducible builds, one image for `web` and `worker`.                                                                                                                                                                                                                                                                                      |
 
-**Deliberate exclusions:** no Elasticsearch (Postgres FTS is sufficient at this content volume and adds no ops burden), no separate headless CMS (the CMS *is* the product requirement — a third-party CMS would make §7 step-up auth and §48 audit logging impossible to enforce), no GraphQL (REST + typed server actions covers the need with less surface area), no e-commerce engine at launch (§54 keeps the door open at the data-model level).
+**Deliberate exclusions:** no Elasticsearch (Postgres FTS is sufficient at this content volume and adds no ops burden), no separate headless CMS (the CMS _is_ the product requirement — a third-party CMS would make §7 step-up auth and §48 audit logging impossible to enforce), no GraphQL (REST + typed server actions covers the need with less surface area), no e-commerce engine at launch (§54 keeps the door open at the data-model level).
 
 ---
 
@@ -232,10 +232,10 @@ Product                       ProductTranslation
 ### 3.3 Full model list
 
 **Identity & security (11)**
-`User`, `Session`, `MfaCredential`, `RecoveryCode`, `LoginAttempt`, `PasswordHistory`, `StepUpChallenge`, `AuditLog`, `SecurityEvent`, `ApiKey`, `RateLimitBucket` *(Redis-primary, Postgres for forensic retention)*
+`User`, `Session`, `MfaCredential`, `RecoveryCode`, `LoginAttempt`, `PasswordHistory`, `StepUpChallenge`, `AuditLog`, `SecurityEvent`, `ApiKey`, `RateLimitBucket` _(Redis-primary, Postgres for forensic retention)_
 
 **Localization (3)**
-`Locale`, `UiTranslation` *(interface strings, namespaced)*, `TranslationJobLink`
+`Locale`, `UiTranslation` _(interface strings, namespaced)_, `TranslationJobLink`
 
 **Structure & CMS (9)**
 `Page`, `PageTranslation`, `PageBlock`, `PageBlockTranslation`, `Menu`, `MenuItem`, `MenuItemTranslation`, `ContentVersion`, `Redirect`
@@ -265,7 +265,7 @@ Product                       ProductTranslation
 `KnowledgeDocument`, `KnowledgeChunk`, `AIConversation`, `AIMessage`, `AIUsage`, `AIJob`, `AIJobItem`, `AIPromptTemplate`
 
 **Analytics & search (6)**
-`PageView`, `EntityView`, `SearchQueryLog`, `CtaClick`, `DownloadEvent`, `AnalyticsDaily` *(rollup)*
+`PageView`, `EntityView`, `SearchQueryLog`, `CtaClick`, `DownloadEvent`, `AnalyticsDaily` _(rollup)_
 
 **System (7)**
 `SiteSetting`, `Banner`, `BannerTranslation`, `NewsletterSubscriber`, `CookieConsent`, `JobRun`, `Notification`
@@ -339,62 +339,84 @@ Argon2id; minimum 12 characters; checked against a local breached-password list 
 
 ## 5. Authorization — Super Admin vs Viewer matrix
 
-Roles map to explicit capability constants. Every use-case declares the capability it needs; the guard is the first statement of the function body. The frontend reads the *same* capability list to hide controls — but hiding is cosmetic only.
+Roles map to explicit capability constants. Every use-case declares the capability it needs; the guard is the first statement of the function body. The frontend reads the _same_ capability list to hide controls — but hiding is cosmetic only.
 
 ```ts
 type Capability =
-  | 'content.read' | 'content.create' | 'content.update' | 'content.publish'
-  | 'content.archive' | 'content.delete.soft' | 'content.delete.permanent' | 'content.restore'
-  | 'translation.read' | 'translation.edit' | 'translation.approve' | 'translation.ai.run'
-  | 'media.read' | 'media.upload' | 'media.delete'
-  | 'menu.read' | 'menu.manage'
-  | 'inquiry.read' | 'inquiry.update' | 'inquiry.export'
-  | 'analytics.read' | 'analytics.export'
-  | 'user.read' | 'user.manage'
-  | 'security.read' | 'security.manage' | 'session.revoke'
-  | 'settings.read' | 'settings.manage'
-  | 'ai.public.configure' | 'ai.admin.use' | 'ai.usage.read'
+  | 'content.read'
+  | 'content.create'
+  | 'content.update'
+  | 'content.publish'
+  | 'content.archive'
+  | 'content.delete.soft'
+  | 'content.delete.permanent'
+  | 'content.restore'
+  | 'translation.read'
+  | 'translation.edit'
+  | 'translation.approve'
+  | 'translation.ai.run'
+  | 'media.read'
+  | 'media.upload'
+  | 'media.delete'
+  | 'menu.read'
+  | 'menu.manage'
+  | 'inquiry.read'
+  | 'inquiry.update'
+  | 'inquiry.export'
+  | 'analytics.read'
+  | 'analytics.export'
+  | 'user.read'
+  | 'user.manage'
+  | 'security.read'
+  | 'security.manage'
+  | 'session.revoke'
+  | 'settings.read'
+  | 'settings.manage'
+  | 'ai.public.configure'
+  | 'ai.admin.use'
+  | 'ai.usage.read'
   | 'audit.read'
-  | 'import.run' | 'export.run'
+  | 'import.run'
+  | 'export.run'
   | 'bulk.run'
 ```
 
-| Capability group | SUPER_ADMIN | VIEWER |
-|---|:---:|:---:|
-| Log into admin | ✅ | ✅ |
-| Dashboard (read-only widgets) | ✅ | ✅ |
-| Read any content, product, partner, brand, service, event, article, resource | ✅ | ✅ |
-| Create / update content | ✅ | ❌ |
-| Publish / unpublish / schedule | ✅ | ❌ |
-| Archive / soft delete | ✅ | ❌ |
-| Restore | ✅ | ❌ |
-| **Permanent delete** (step-up + MFA) | ✅ | ❌ |
-| Media upload / replace / delete | ✅ | ❌ |
-| Media library browse | ✅ | ✅ |
-| Menus: read | ✅ | ✅ |
-| Menus: create/edit/reorder/disable/delete | ✅ | ❌ |
-| Translations: view status & completeness | ✅ | ✅ |
-| Translations: edit / approve / run AI | ✅ | ❌ |
-| Inquiries: list & read | ✅ | ✅ (read-only, PII-masked by default setting) |
-| Inquiries: change status, add notes, export | ✅ | ❌ |
-| Forms: build/modify | ✅ | ❌ |
-| Analytics: view | ✅ | ✅ |
-| Analytics: export | ✅ | ❌ |
-| Audit log: read | ✅ | ❌ |
-| Security center: view | ✅ | ❌ |
-| Security settings, session revoke, IP rules | ✅ | ❌ |
-| Users & roles | ✅ | ❌ |
-| Site settings, languages, default locale | ✅ | ❌ |
-| AI admin assistant: analytical queries | ✅ | ❌ |
-| AI admin assistant: content mutations | ✅ (+ review step) | ❌ |
-| AI configuration, limits, provider keys | ✅ | ❌ |
-| Import / export data | ✅ | ❌ |
-| Bulk operations | ✅ | ❌ |
-| Maintenance mode | ✅ | ❌ |
+| Capability group                                                             |    SUPER_ADMIN     |                    VIEWER                     |
+| ---------------------------------------------------------------------------- | :----------------: | :-------------------------------------------: |
+| Log into admin                                                               |         ✅         |                      ✅                       |
+| Dashboard (read-only widgets)                                                |         ✅         |                      ✅                       |
+| Read any content, product, partner, brand, service, event, article, resource |         ✅         |                      ✅                       |
+| Create / update content                                                      |         ✅         |                      ❌                       |
+| Publish / unpublish / schedule                                               |         ✅         |                      ❌                       |
+| Archive / soft delete                                                        |         ✅         |                      ❌                       |
+| Restore                                                                      |         ✅         |                      ❌                       |
+| **Permanent delete** (step-up + MFA)                                         |         ✅         |                      ❌                       |
+| Media upload / replace / delete                                              |         ✅         |                      ❌                       |
+| Media library browse                                                         |         ✅         |                      ✅                       |
+| Menus: read                                                                  |         ✅         |                      ✅                       |
+| Menus: create/edit/reorder/disable/delete                                    |         ✅         |                      ❌                       |
+| Translations: view status & completeness                                     |         ✅         |                      ✅                       |
+| Translations: edit / approve / run AI                                        |         ✅         |                      ❌                       |
+| Inquiries: list & read                                                       |         ✅         | ✅ (read-only, PII-masked by default setting) |
+| Inquiries: change status, add notes, export                                  |         ✅         |                      ❌                       |
+| Forms: build/modify                                                          |         ✅         |                      ❌                       |
+| Analytics: view                                                              |         ✅         |                      ✅                       |
+| Analytics: export                                                            |         ✅         |                      ❌                       |
+| Audit log: read                                                              |         ✅         |                      ❌                       |
+| Security center: view                                                        |         ✅         |                      ❌                       |
+| Security settings, session revoke, IP rules                                  |         ✅         |                      ❌                       |
+| Users & roles                                                                |         ✅         |                      ❌                       |
+| Site settings, languages, default locale                                     |         ✅         |                      ❌                       |
+| AI admin assistant: analytical queries                                       |         ✅         |                      ❌                       |
+| AI admin assistant: content mutations                                        | ✅ (+ review step) |                      ❌                       |
+| AI configuration, limits, provider keys                                      |         ✅         |                      ❌                       |
+| Import / export data                                                         |         ✅         |                      ❌                       |
+| Bulk operations                                                              |         ✅         |                      ❌                       |
+| Maintenance mode                                                             |         ✅         |                      ❌                       |
 
 Viewer PII masking on inquiries is a `SiteSetting` (`inquiry.viewerSeesPii`, default `false`): email/phone render as `j•••@•••.com` until a Super Admin enables full visibility.
 
-**Enforcement test suite** (§70): for every capability, an automated test asserts a Viewer session receives `403` from the API route *and* that the use-case throws when called directly with a Viewer actor. New endpoints without a guard fail a lint rule and a test that enumerates all route handlers.
+**Enforcement test suite** (§70): for every capability, an automated test asserts a Viewer session receives `403` from the API route _and_ that the use-case throws when called directly with a Viewer actor. New endpoints without a guard fail a lint rule and a test that enumerates all route handlers.
 
 ---
 
@@ -402,11 +424,11 @@ Viewer PII masking on inquiries is a `SiteSetting` (`inquiry.viewerSeesPii`, def
 
 ### 6.1 Three separate concerns, three mechanisms
 
-| Concern | Mechanism | Editable by |
-|---|---|---|
+| Concern                                                             | Mechanism                                                                                                  | Editable by                                          |
+| ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
 | **UI strings** (buttons, labels, validation messages, date formats) | `next-intl` message catalogues in `messages/<locale>.json`, overridable at runtime by `UiTranslation` rows | Developer default + Super Admin override in admin UI |
-| **Content** (every entity) | `*Translation` tables, per-locale status | Super Admin, AI-assisted |
-| **Metadata/SEO** | `SeoMeta` rows keyed by `(entityType, entityId, locale)` | Super Admin, AI-assisted |
+| **Content** (every entity)                                          | `*Translation` tables, per-locale status                                                                   | Super Admin, AI-assisted                             |
+| **Metadata/SEO**                                                    | `SeoMeta` rows keyed by `(entityType, entityId, locale)`                                                   | Super Admin, AI-assisted                             |
 
 No translated business string is ever hardcoded in a component (§40, §79). A lint rule flags string literals in JSX outside of `t()` calls.
 
@@ -471,7 +493,7 @@ interface AIProvider {
 }
 ```
 
-`AIRouter` resolves a provider per *task type* (`public_chat`, `translate`, `seo`, `summarize`, `embed`, `audit`) from `SiteSetting('ai.routing')`, with a documented fallback chain on provider error. Every call goes through `withUsageTracking()` which writes an `AIUsage` row (task, provider, model, input/output tokens, latency, estimated cost, actor, entity ref, success/error) — that is what makes §29 real numbers rather than a decorative chart.
+`AIRouter` resolves a provider per _task type_ (`public_chat`, `translate`, `seo`, `summarize`, `embed`, `audit`) from `SiteSetting('ai.routing')`, with a documented fallback chain on provider error. Every call goes through `withUsageTracking()` which writes an `AIUsage` row (task, provider, model, input/output tokens, latency, estimated cost, actor, entity ref, success/error) — that is what makes §29 real numbers rather than a decorative chart.
 
 ### 7.2 Public assistant — grounded retrieval
 
@@ -485,7 +507,7 @@ Published entity ──▶ Normalizer ──▶ Chunker ──▶ Embedder ─�
    resource/page/FAQ)   preserve SKU)  a spec table)
 ```
 
-Only `status = PUBLISHED`, `deletedAt IS NULL`, `visibility = PUBLIC` rows are indexed. Unpublish or soft-delete removes the chunks in the same transaction-adjacent job. There is no path by which a draft, an archived record or an admin-only document enters the public index — enforced by the indexer reading through the *public* repository, the same one the public site uses.
+Only `status = PUBLISHED`, `deletedAt IS NULL`, `visibility = PUBLIC` rows are indexed. Unpublish or soft-delete removes the chunks in the same transaction-adjacent job. There is no path by which a draft, an archived record or an admin-only document enters the public index — enforced by the indexer reading through the _public_ repository, the same one the public site uses.
 
 **Answering:**
 
@@ -514,19 +536,19 @@ User question
 
 Same provider layer, different tool set. The admin assistant is a **tool-calling agent with a whitelisted, typed tool registry**:
 
-| Tool | Type | Authorization |
-|---|---|---|
-| `findMissingTranslations(entity?, locale?)` | read | `translation.read` |
-| `findContentIssues(check)` (missing SEO, alt text, logos, expired certs, duplicate slugs, broken links) | read | `content.read` |
-| `queryAnalytics(metric, range)` | read | `analytics.read` |
-| `proposeTranslation(entityRef, locale)` | write-as-draft | `translation.ai.run` |
-| `proposeSeo(entityRef, locale)` | write-as-draft | `content.update` |
-| `rewrite(text, tone)` | pure | `ai.admin.use` |
-| `summarize(entityRef)` | pure | `ai.admin.use` |
-| `generateAltText(mediaId)` | write-as-draft | `media.upload` |
-| `enqueueBulkTranslation(selection, locales)` | job | `translation.ai.run` + confirmation |
+| Tool                                                                                                    | Type           | Authorization                       |
+| ------------------------------------------------------------------------------------------------------- | -------------- | ----------------------------------- |
+| `findMissingTranslations(entity?, locale?)`                                                             | read           | `translation.read`                  |
+| `findContentIssues(check)` (missing SEO, alt text, logos, expired certs, duplicate slugs, broken links) | read           | `content.read`                      |
+| `queryAnalytics(metric, range)`                                                                         | read           | `analytics.read`                    |
+| `proposeTranslation(entityRef, locale)`                                                                 | write-as-draft | `translation.ai.run`                |
+| `proposeSeo(entityRef, locale)`                                                                         | write-as-draft | `content.update`                    |
+| `rewrite(text, tone)`                                                                                   | pure           | `ai.admin.use`                      |
+| `summarize(entityRef)`                                                                                  | pure           | `ai.admin.use`                      |
+| `generateAltText(mediaId)`                                                                              | write-as-draft | `media.upload`                      |
+| `enqueueBulkTranslation(selection, locales)`                                                            | job            | `translation.ai.run` + confirmation |
 
-**Every tool call runs with the caller's own actor and permission set** — the assistant cannot exceed the human's authority. Write tools produce **drafts and proposals only**. Nothing publishes. Destructive intent is never executed inline: the assistant returns a *plan* object that the UI renders as an explicit confirmation with count, scope, irreversibility warning, and a password (+MFA) prompt (§30). The confirmation is executed by the normal use-case with the normal guard — the AI path has no privileged shortcut.
+**Every tool call runs with the caller's own actor and permission set** — the assistant cannot exceed the human's authority. Write tools produce **drafts and proposals only**. Nothing publishes. Destructive intent is never executed inline: the assistant returns a _plan_ object that the UI renders as an explicit confirmation with count, scope, irreversibility warning, and a password (+MFA) prompt (§30). The confirmation is executed by the normal use-case with the normal guard — the AI path has no privileged shortcut.
 
 ### 7.4 Multilingual search + AI language support
 
@@ -547,14 +569,14 @@ Search (§22) and RAG share the retrieval substrate:
 
 ### 7.6 AI security (§30)
 
-| Threat | Control |
-|---|---|
+| Threat                        | Control                                                                                                                                                                                                                                                                |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Prompt injection from content | Retrieved passages are delimited and labelled untrusted data; the system prompt states that instructions inside passages are content, not commands. Tool calls are validated against the registry and the caller's capabilities regardless of what the model asks for. |
-| System prompt extraction | Prompt is server-side only; extraction attempts are refused and logged; no prompt content in client payloads or error messages. |
-| Data exposure | Public assistant reads exclusively from the public index (§7.2). Separate provider credentials and separate rate-limit pools for public vs admin. |
-| Malicious document ingestion | Uploaded documents are type/MIME/size validated, text-extracted in a sandboxed job, and never executed. Extracted text is treated as untrusted. |
-| Secret leakage | Provider keys live in env/secret store, never in the DB in plaintext (keys entered in admin are encrypted at rest with a KMS/env master key and are write-only in the UI). Outbound payloads pass a secret-pattern scrubber. |
-| Privilege escalation | Tools execute as the caller; destructive operations require the same step-up flow as manual ones. |
+| System prompt extraction      | Prompt is server-side only; extraction attempts are refused and logged; no prompt content in client payloads or error messages.                                                                                                                                        |
+| Data exposure                 | Public assistant reads exclusively from the public index (§7.2). Separate provider credentials and separate rate-limit pools for public vs admin.                                                                                                                      |
+| Malicious document ingestion  | Uploaded documents are type/MIME/size validated, text-extracted in a sandboxed job, and never executed. Extracted text is treated as untrusted.                                                                                                                        |
+| Secret leakage                | Provider keys live in env/secret store, never in the DB in plaintext (keys entered in admin are encrypted at rest with a KMS/env master key and are write-only in the UI). Outbound payloads pass a secret-pattern scrubber.                                           |
+| Privilege escalation          | Tools execute as the caller; destructive operations require the same step-up flow as manual ones.                                                                                                                                                                      |
 
 ---
 
@@ -653,33 +675,33 @@ admin.<domain>/
 
 ### 10.1 Defence layers
 
-| Layer | Controls |
-|---|---|
-| Edge / proxy | TLS 1.2+, HSTS preload, request size caps, connection rate limits, optional WAF rules, separate server blocks for public and admin hosts |
-| Middleware | Host-based routing guard (admin routes 404 on the public host), IP allow-list (optional), bot/abuse throttling, security headers |
-| Headers | `Content-Security-Policy` (nonce-based, no `unsafe-inline` in production), `X-Content-Type-Options`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy`, `Cross-Origin-Opener-Policy`, `X-Frame-Options: DENY` on admin |
-| Session | HttpOnly/Secure/SameSite/`__Host-`, idle + absolute expiry, rotation, server-side revocation |
-| CSRF | SameSite=Lax + double-submit token on all state-changing requests + `Origin`/`Sec-Fetch-Site` verification |
-| Input | Zod validation at every boundary; rich text sanitised server-side with an allow-list sanitiser (DOMPurify-equivalent on the server) before storage *and* escaped at render |
-| Output | React escaping by default; `dangerouslySetInnerHTML` permitted only for sanitiser-processed content, behind a single audited component |
-| SQL | Prisma parameterisation; `$queryRaw` only with tagged templates (never string concatenation), lint-enforced |
-| Files | Extension + magic-byte MIME verification + size cap + image re-encode (strips EXIF and embedded payloads) + randomised storage keys + `Content-Disposition: attachment` + no execution path in the storage bucket; SVG uploads sanitised or rejected by setting |
-| Authorization | Server-side capability guard in every use-case; automated enumeration test |
-| Secrets | Env/secret store only; `.env` git-ignored; `.env.example` documents every key; secret scanning in CI |
-| Audit | Append-only `AuditLog`; no delete capability exposed in code or UI; retention-based archival only |
-| Dependencies | Lockfile, `npm audit` + Dependabot in CI, pinned base images |
+| Layer         | Controls                                                                                                                                                                                                                                                        |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Edge / proxy  | TLS 1.2+, HSTS preload, request size caps, connection rate limits, optional WAF rules, separate server blocks for public and admin hosts                                                                                                                        |
+| Middleware    | Host-based routing guard (admin routes 404 on the public host), IP allow-list (optional), bot/abuse throttling, security headers                                                                                                                                |
+| Headers       | `Content-Security-Policy` (nonce-based, no `unsafe-inline` in production), `X-Content-Type-Options`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy`, `Cross-Origin-Opener-Policy`, `X-Frame-Options: DENY` on admin                   |
+| Session       | HttpOnly/Secure/SameSite/`__Host-`, idle + absolute expiry, rotation, server-side revocation                                                                                                                                                                    |
+| CSRF          | SameSite=Lax + double-submit token on all state-changing requests + `Origin`/`Sec-Fetch-Site` verification                                                                                                                                                      |
+| Input         | Zod validation at every boundary; rich text sanitised server-side with an allow-list sanitiser (DOMPurify-equivalent on the server) before storage _and_ escaped at render                                                                                      |
+| Output        | React escaping by default; `dangerouslySetInnerHTML` permitted only for sanitiser-processed content, behind a single audited component                                                                                                                          |
+| SQL           | Prisma parameterisation; `$queryRaw` only with tagged templates (never string concatenation), lint-enforced                                                                                                                                                     |
+| Files         | Extension + magic-byte MIME verification + size cap + image re-encode (strips EXIF and embedded payloads) + randomised storage keys + `Content-Disposition: attachment` + no execution path in the storage bucket; SVG uploads sanitised or rejected by setting |
+| Authorization | Server-side capability guard in every use-case; automated enumeration test                                                                                                                                                                                      |
+| Secrets       | Env/secret store only; `.env` git-ignored; `.env.example` documents every key; secret scanning in CI                                                                                                                                                            |
+| Audit         | Append-only `AuditLog`; no delete capability exposed in code or UI; retention-based archival only                                                                                                                                                               |
+| Dependencies  | Lockfile, `npm audit` + Dependabot in CI, pinned base images                                                                                                                                                                                                    |
 
 ### 10.2 Rate limiting map
 
-| Endpoint class | Limit |
-|---|---|
-| Admin login | 5 / 15 min per IP, 5 / 15 min per account, lockout at 10 |
-| Step-up challenge | 5 / 10 min per session |
-| Public forms | 3 / 10 min per IP + honeypot + time-trap + optional Turnstile |
-| Public AI assistant | 10 / min, 100 / day per visitor; global budget guard |
-| Search | 30 / min per IP |
-| Public API reads | 120 / min per IP |
-| Downloads | 60 / min per IP |
+| Endpoint class      | Limit                                                         |
+| ------------------- | ------------------------------------------------------------- |
+| Admin login         | 5 / 15 min per IP, 5 / 15 min per account, lockout at 10      |
+| Step-up challenge   | 5 / 10 min per session                                        |
+| Public forms        | 3 / 10 min per IP + honeypot + time-trap + optional Turnstile |
+| Public AI assistant | 10 / min, 100 / day per visitor; global budget guard          |
+| Search              | 30 / min per IP                                               |
+| Public API reads    | 120 / min per IP                                              |
+| Downloads           | 60 / min per IP                                               |
 
 ### 10.3 Audit event schema (§48)
 
@@ -754,11 +776,11 @@ Upload (admin)
 
 ### 13.1 Environments
 
-| Env | Purpose | Data | Notes |
-|---|---|---|---|
-| Development | Local docker-compose | Seed data, clearly labelled | `SEED_DATA=true` banner in admin |
-| Staging | Pre-production verification | Anonymised copy or seed | Password-protected, `noindex` globally |
-| Production | Live | Real | Secrets from the host's secret store |
+| Env         | Purpose                     | Data                        | Notes                                  |
+| ----------- | --------------------------- | --------------------------- | -------------------------------------- |
+| Development | Local docker-compose        | Seed data, clearly labelled | `SEED_DATA=true` banner in admin       |
+| Staging     | Pre-production verification | Anonymised copy or seed     | Password-protected, `noindex` globally |
+| Production  | Live                        | Real                        | Secrets from the host's secret store   |
 
 Environment parity is enforced by using the same image and the same compose topology; only env vars and scale differ.
 
@@ -766,12 +788,12 @@ Environment parity is enforced by using the same image and the same compose topo
 
 ```yaml
 services:
-  proxy:     nginx (TLS, headers, rate limit, static passthrough)
-  web:       node:22-alpine, next start          (2+ replicas)
-  worker:    same image, `node worker.js`        (1-2 replicas)
-  postgres:  postgres:16 + pgvector              (volume, WAL archiving)
-  redis:     redis:7 (appendonly)                (volume)
-  minio:     S3-compatible                       (volume; or external S3)
+  proxy: nginx (TLS, headers, rate limit, static passthrough)
+  web: node:22-alpine, next start          (2+ replicas)
+  worker: same image, `node worker.js`        (1-2 replicas)
+  postgres: postgres:16 + pgvector              (volume, WAL archiving)
+  redis: redis:7 (appendonly)                (volume)
+  minio: S3-compatible                       (volume; or external S3)
 ```
 
 Multi-stage Dockerfile: `deps → build → runner`, non-root user, `output: 'standalone'`, healthchecks on `/api/health` (liveness) and `/api/health/ready` (DB + Redis + storage reachability).
@@ -791,12 +813,12 @@ Migrations run as a separate job before the new image serves traffic; migrations
 
 ### 13.4 Backup and recovery
 
-| What | How | Frequency | Retention |
-|---|---|---|---|
-| PostgreSQL | `pg_dump` (logical) + continuous WAL archiving to object storage | Dump nightly; WAL continuous | 7 daily, 4 weekly, 12 monthly |
-| Object storage | Bucket versioning + cross-bucket replication | Continuous | 30 days of versions |
-| Secrets | Host secret store, documented recovery procedure | — | — |
-| Restore drill | Documented runbook, executed quarterly on staging | — | RPO ≤ 15 min, RTO ≤ 2 h |
+| What           | How                                                              | Frequency                    | Retention                     |
+| -------------- | ---------------------------------------------------------------- | ---------------------------- | ----------------------------- |
+| PostgreSQL     | `pg_dump` (logical) + continuous WAL archiving to object storage | Dump nightly; WAL continuous | 7 daily, 4 weekly, 12 monthly |
+| Object storage | Bucket versioning + cross-bucket replication                     | Continuous                   | 30 days of versions           |
+| Secrets        | Host secret store, documented recovery procedure                 | —                            | —                             |
+| Restore drill  | Documented runbook, executed quarterly on staging                | —                            | RPO ≤ 15 min, RTO ≤ 2 h       |
 
 `docs/OPERATIONS.md` will carry the exact commands for backup, point-in-time restore, and the migration-safety checklist.
 
@@ -808,25 +830,25 @@ Structured JSON logs (Pino) with `requestId` correlation; OpenTelemetry traces f
 
 ## 14. Development phases
 
-| Phase | Deliverable | Exit criteria |
-|---|---|---|
-| **0** | This architecture document | Approved |
-| **1** | Foundation: repo, TS strict, Tailwind + tokens, Docker compose, CI, health checks, env handling | `docker compose up` yields a running app; CI green |
-| **2** | Database: full Prisma schema, migrations, soft-delete extension, versioning, audit plumbing, seed | `prisma migrate` clean; seed produces a browsable dataset |
-| **3** | Auth & RBAC: login, MFA, sessions, lockout, step-up, capability guards, security center | Authorization test suite green for every capability |
-| **4** | Admin shell: navigation, tables, forms, dialogs, empty states, unsaved-change guards, i18n of the admin UI | A non-developer can navigate without instruction |
-| **5** | CMS core: pages + block builder, menus, media library, settings, banners, footer | A page can be built, reordered, published, versioned and restored without code |
-| **6** | Directories: partners, brands, products (+categories, attributes, specs, relations) | Full CRUD + relations + bulk + import/export |
-| **7** | Services, achievements, events, news, resources, certificates, company/team/offices | Public detail pages render from DB only |
-| **8** | Multilingual system: translation tables wired, completeness matrix, workflow, UI string overrides | Completeness dashboard reflects reality |
-| **9** | Public site: design system, all routes, SEO infrastructure, structured data, sitemaps, hreflang | Lighthouse ≥ 95 perf / 100 a11y / 100 SEO on key templates |
-| **10** | Search: FTS + trigram + CJK, grouped results, query logging | Typo and cross-locale queries return sensible results |
-| **11** | Forms, inquiries, notifications, newsletter | Submission → DB → email → pipeline works end to end |
-| **12** | Analytics: collection, rollups, dashboards | Dashboard numbers reconcile with raw events |
-| **13** | AI: provider adapter, indexing, public assistant, admin assistant, jobs, usage, guards | Grounding, citation and refusal behaviour verified by tests |
-| **14** | Hardening: headers, CSP, rate limits, upload validation, audit coverage, pen-test checklist | Security checklist signed off |
-| **15** | Testing & performance: full suite, load test, query tuning, caching | Coverage targets met; p95 latency budget met |
-| **16** | Deployment: staging, production runbooks, backups, monitoring, restore drill | Restore drill passed on staging |
+| Phase  | Deliverable                                                                                                | Exit criteria                                                                  |
+| ------ | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| **0**  | This architecture document                                                                                 | Approved                                                                       |
+| **1**  | Foundation: repo, TS strict, Tailwind + tokens, Docker compose, CI, health checks, env handling            | `docker compose up` yields a running app; CI green                             |
+| **2**  | Database: full Prisma schema, migrations, soft-delete extension, versioning, audit plumbing, seed          | `prisma migrate` clean; seed produces a browsable dataset                      |
+| **3**  | Auth & RBAC: login, MFA, sessions, lockout, step-up, capability guards, security center                    | Authorization test suite green for every capability                            |
+| **4**  | Admin shell: navigation, tables, forms, dialogs, empty states, unsaved-change guards, i18n of the admin UI | A non-developer can navigate without instruction                               |
+| **5**  | CMS core: pages + block builder, menus, media library, settings, banners, footer                           | A page can be built, reordered, published, versioned and restored without code |
+| **6**  | Directories: partners, brands, products (+categories, attributes, specs, relations)                        | Full CRUD + relations + bulk + import/export                                   |
+| **7**  | Services, achievements, events, news, resources, certificates, company/team/offices                        | Public detail pages render from DB only                                        |
+| **8**  | Multilingual system: translation tables wired, completeness matrix, workflow, UI string overrides          | Completeness dashboard reflects reality                                        |
+| **9**  | Public site: design system, all routes, SEO infrastructure, structured data, sitemaps, hreflang            | Lighthouse ≥ 95 perf / 100 a11y / 100 SEO on key templates                     |
+| **10** | Search: FTS + trigram + CJK, grouped results, query logging                                                | Typo and cross-locale queries return sensible results                          |
+| **11** | Forms, inquiries, notifications, newsletter                                                                | Submission → DB → email → pipeline works end to end                            |
+| **12** | Analytics: collection, rollups, dashboards                                                                 | Dashboard numbers reconcile with raw events                                    |
+| **13** | AI: provider adapter, indexing, public assistant, admin assistant, jobs, usage, guards                     | Grounding, citation and refusal behaviour verified by tests                    |
+| **14** | Hardening: headers, CSP, rate limits, upload validation, audit coverage, pen-test checklist                | Security checklist signed off                                                  |
+| **15** | Testing & performance: full suite, load test, query tuning, caching                                        | Coverage targets met; p95 latency budget met                                   |
+| **16** | Deployment: staging, production runbooks, backups, monitoring, restore drill                               | Restore drill passed on staging                                                |
 
 Phases 5–13 ship module by module; each module is independently deployable and testable.
 
@@ -834,22 +856,22 @@ Phases 5–13 ship module by module; each module is independently deployable and
 
 ## 15. Risks and mitigations
 
-| # | Risk | Impact | Mitigation |
-|---|---|---|---|
-| R1 | **Scope breadth** — 90 requirement sections is a multi-month build; a rushed "everything at once" attempt produces a shallow demo | Project fails its own acceptance criteria (§86) | Strict phase gating with exit criteria; each phase is genuinely finished (tests + audit + i18n) before the next starts. No module is marked done while any part of it is mocked. |
-| R2 | **AI hallucination of business facts** — invented specs, certifications or partner claims | Legal and reputational damage in a medical-adjacent industry | Retrieval-only grounding, mechanical citation validation, refusal path, medical-scope limiter, plus §80's rule that seed data never implies real claims. |
-| R3 | **Prompt injection via CMS content** | Assistant coerced into leaking prompts or misusing tools | Untrusted-data framing, tool registry allow-list, capability checks on every tool call as the caller, no destructive tool executes inline. |
-| R4 | **Translation drift** — source edited, translations silently stale | Wrong information published in ru/uz/zh | `sourceHash` outdated detection, admin queue, sitemap exclusion of unapproved locales, fallback chain that never renders empty. |
-| R5 | **Chinese search and typography quality** | Poor experience for a target market | Bigram indexing + vector retrieval, CJK type tokens, native-speaker review checkpoint before launch (flagged as a business task, not a code task). |
-| R6 | **Admin surface discovery / credential attack** | Compromise of the whole CMS | Separate host, no public references, `noindex`, throttling + lockout, MFA, optional IP allow-list, step-up on destructive actions, session revocation, full audit. |
-| R7 | **Unsafe file uploads** | Stored XSS or malware distribution | Magic-byte verification, re-encode images, sanitise/reject SVG, randomised keys, attachment disposition, no execution in bucket. |
-| R8 | **AI cost overrun** | Unbudgeted spend | Per-period budgets with hard stop, dedup by content hash, response caching, per-user and per-IP limits, usage dashboard. |
-| R9 | **Performance regression from CMS flexibility** — arbitrary blocks and deep relations cause N+1 queries | Slow pages, poor Core Web Vitals | Repository-level eager loading per template, query budget assertions in tests, Redis caching of listings, ISR with tag invalidation, index plan in §3.4. |
-| R10 | **Data loss on destructive operations** | Irrecoverable content loss | Soft delete by default, versioning with restore, step-up on permanent delete, nightly dumps + WAL PITR, quarterly restore drill. |
-| R11 | **Schema rigidity blocking future B2B/ERP modules** | Expensive rewrite later | Product model already carries SKU/unit/packaging and an extensible attribute system; `MediaAsset.visibility` supports private documents; account/pricing/order tables are designed-for but not created; all modules communicate through use-case facades so a new bounded context plugs in rather than threads through. |
-| R12 | **Single-operator bus factor** on an unfamiliar custom CMS | Company cannot maintain the platform | Admin UX designed for non-developers (§78), inline help, seeded example content, and `docs/` covering operations, content model and runbooks. |
-| R13 | **Legal/compliance overreach** — claiming GDPR "compliance" | Misleading the business | Architecture provides the *mechanisms* (consent records, retention config, export/delete paths, audit). The documentation states plainly that legal compliance requires review by qualified counsel; no compliance claim is asserted in code or copy. |
-| R14 | **Missing real business content at launch** | Empty or fake-looking site | Every hardcodable value is a CMS field with a clearly-marked editable placeholder; a launch checklist enumerates every placeholder that must be replaced before go-live. Seed data is visibly labelled and refuses to load with `NODE_ENV=production` unless explicitly forced. |
+| #   | Risk                                                                                                                              | Impact                                                       | Mitigation                                                                                                                                                                                                                                                                                                              |
+| --- | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| R1  | **Scope breadth** — 90 requirement sections is a multi-month build; a rushed "everything at once" attempt produces a shallow demo | Project fails its own acceptance criteria (§86)              | Strict phase gating with exit criteria; each phase is genuinely finished (tests + audit + i18n) before the next starts. No module is marked done while any part of it is mocked.                                                                                                                                        |
+| R2  | **AI hallucination of business facts** — invented specs, certifications or partner claims                                         | Legal and reputational damage in a medical-adjacent industry | Retrieval-only grounding, mechanical citation validation, refusal path, medical-scope limiter, plus §80's rule that seed data never implies real claims.                                                                                                                                                                |
+| R3  | **Prompt injection via CMS content**                                                                                              | Assistant coerced into leaking prompts or misusing tools     | Untrusted-data framing, tool registry allow-list, capability checks on every tool call as the caller, no destructive tool executes inline.                                                                                                                                                                              |
+| R4  | **Translation drift** — source edited, translations silently stale                                                                | Wrong information published in ru/uz/zh                      | `sourceHash` outdated detection, admin queue, sitemap exclusion of unapproved locales, fallback chain that never renders empty.                                                                                                                                                                                         |
+| R5  | **Chinese search and typography quality**                                                                                         | Poor experience for a target market                          | Bigram indexing + vector retrieval, CJK type tokens, native-speaker review checkpoint before launch (flagged as a business task, not a code task).                                                                                                                                                                      |
+| R6  | **Admin surface discovery / credential attack**                                                                                   | Compromise of the whole CMS                                  | Separate host, no public references, `noindex`, throttling + lockout, MFA, optional IP allow-list, step-up on destructive actions, session revocation, full audit.                                                                                                                                                      |
+| R7  | **Unsafe file uploads**                                                                                                           | Stored XSS or malware distribution                           | Magic-byte verification, re-encode images, sanitise/reject SVG, randomised keys, attachment disposition, no execution in bucket.                                                                                                                                                                                        |
+| R8  | **AI cost overrun**                                                                                                               | Unbudgeted spend                                             | Per-period budgets with hard stop, dedup by content hash, response caching, per-user and per-IP limits, usage dashboard.                                                                                                                                                                                                |
+| R9  | **Performance regression from CMS flexibility** — arbitrary blocks and deep relations cause N+1 queries                           | Slow pages, poor Core Web Vitals                             | Repository-level eager loading per template, query budget assertions in tests, Redis caching of listings, ISR with tag invalidation, index plan in §3.4.                                                                                                                                                                |
+| R10 | **Data loss on destructive operations**                                                                                           | Irrecoverable content loss                                   | Soft delete by default, versioning with restore, step-up on permanent delete, nightly dumps + WAL PITR, quarterly restore drill.                                                                                                                                                                                        |
+| R11 | **Schema rigidity blocking future B2B/ERP modules**                                                                               | Expensive rewrite later                                      | Product model already carries SKU/unit/packaging and an extensible attribute system; `MediaAsset.visibility` supports private documents; account/pricing/order tables are designed-for but not created; all modules communicate through use-case facades so a new bounded context plugs in rather than threads through. |
+| R12 | **Single-operator bus factor** on an unfamiliar custom CMS                                                                        | Company cannot maintain the platform                         | Admin UX designed for non-developers (§78), inline help, seeded example content, and `docs/` covering operations, content model and runbooks.                                                                                                                                                                           |
+| R13 | **Legal/compliance overreach** — claiming GDPR "compliance"                                                                       | Misleading the business                                      | Architecture provides the _mechanisms_ (consent records, retention config, export/delete paths, audit). The documentation states plainly that legal compliance requires review by qualified counsel; no compliance claim is asserted in code or copy.                                                                   |
+| R14 | **Missing real business content at launch**                                                                                       | Empty or fake-looking site                                   | Every hardcodable value is a CMS field with a clearly-marked editable placeholder; a launch checklist enumerates every placeholder that must be replaced before go-live. Seed data is visibly labelled and refuses to load with `NODE_ENV=production` unless explicitly forced.                                         |
 
 ---
 

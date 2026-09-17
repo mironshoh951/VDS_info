@@ -29,3 +29,6 @@ src/server/db/generated/
 
 # Uploaded media when MEDIA_DRIVER=local
 /storage
+
+# Superseded files kept only until someone deletes them by hand.
+_to_delete/
