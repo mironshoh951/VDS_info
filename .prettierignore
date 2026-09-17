@@ -1,0 +1,10 @@
+.next
+node_modules
+dist-worker
+coverage
+playwright-report
+package-lock.json
+prisma/migrations
+
+# Superseded files kept only until someone deletes them by hand.
+_to_delete/

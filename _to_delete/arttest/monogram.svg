@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0.65" y2="1">
+      <stop offset="0" stop-color="#2f5d6f"/>
+      <stop offset="1" stop-color="#18343f"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#6da5ba" stop-opacity="0.5"/>
+      <stop offset="0.55" stop-color="#6da5ba" stop-opacity="0.275"/>
+      <stop offset="1" stop-color="#6da5ba" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" rx="102" fill="url(#tile)"/>
+  <circle cx="420" cy="92" r="256" fill="url(#glow)"/>
+  <circle cx="256" cy="256" r="184"
+          fill="none" stroke="#ffffff" stroke-opacity="0.14" stroke-width="4.1"/>
+  <text x="256" y="317" text-anchor="middle"
+        font-family="Inter, Helvetica, Arial, sans-serif" font-weight="600" font-size="174"
+        fill="#ffffff" letter-spacing="6.1">ND</text>
+</svg>

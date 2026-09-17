@@ -1,0 +1,31 @@
+node_modules/
+.next/
+out/
+dist-worker/
+build/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+next-env.d.ts
+
+.env
+.env.local
+.env.*.local
+!.env.example
+
+.DS_Store
+*.log
+npm-debug.log*
+
+/data/
+/uploads/
+.vscode/
+.idea/
+
+# Prisma generated client (run `npm run db:generate`)
+src/server/db/generated/
+.prisma-bin/
+
+# Uploaded media when MEDIA_DRIVER=local
+/storage

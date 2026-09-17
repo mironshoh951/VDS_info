@@ -1,0 +1,3203 @@
+// ============================================================================
+// VDS Dental Platform — database schema
+//
+// Patterns used throughout (see docs/ARCHITECTURE.md §3.1):
+//   P1  Base entity + `*Translation` table, one row per locale.
+//   P2  Polymorphic attachments (SeoMeta, MediaUsage, AuditLog, ContentVersion)
+//       keyed by (entityType, entityId).
+//   P3  Soft delete via `deletedAt` on every content entity; a Prisma client
+//       extension injects `deletedAt: null` into reads by default.
+//   P4  Versioning by JSON snapshot in ContentVersion, written in the same
+//       transaction as the mutation.
+//
+// Every translation row carries `sourceHash` — the hash of the source-locale
+// content it was produced from. A mismatch means the translation is OUTDATED.
+// This single field powers the translation dashboard, prevents duplicate AI
+// spend, and keeps stale content out of localized sitemaps.
+// ============================================================================
+
+generator client {
+  provider        = "prisma-client"
+  output          = "../src/server/db/generated"
+  previewFeatures = ["postgresqlExtensions"]
+  moduleFormat    = "esm"
+}
+
+datasource db {
+  provider   = "postgresql"
+  extensions = [vector, pg_trgm, unaccent, citext, btree_gin]
+}
+
+// ============================================================================
+// ENUMS
+// ============================================================================
+
+enum UserRole {
+  SUPER_ADMIN
+  VIEWER
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  LOCKED
+}
+
+/// Publication lifecycle shared by every content entity (§34).
+enum ContentStatus {
+  DRAFT
+  REVIEW
+  SCHEDULED
+  PUBLISHED
+  ARCHIVED
+}
+
+/// Per-locale translation lifecycle (§27). AI_DRAFT never publishes on its own.
+enum TranslationStatus {
+  MISSING
+  AI_DRAFT
+  HUMAN_DRAFT
+  APPROVED
+  OUTDATED
+}
+
+enum TranslationOrigin {
+  HUMAN
+  AI
+  IMPORT
+}
+
+enum TextDirection {
+  LTR
+  RTL
+}
+
+/// Polymorphic entity discriminator. Used by SeoMeta, MediaUsage, AuditLog,
+/// ContentVersion, KnowledgeDocument and the search index.
+enum EntityType {
+  PAGE
+  PRODUCT
+  PRODUCT_CATEGORY
+  PARTNER
+  BRAND
+  SERVICE
+  ACHIEVEMENT
+  EVENT
+  ARTICLE
+  RESOURCE
+  CERTIFICATE
+  FAQ
+  TESTIMONIAL
+  TEAM_MEMBER
+  OFFICE
+  MILESTONE
+  MENU
+  MENU_ITEM
+  MEDIA_ASSET
+  FORM
+  INQUIRY
+  BANNER
+  USER
+  SITE_SETTING
+  TAG
+  PARTNER_CATEGORY
+}
+
+enum PartnershipType {
+  MANUFACTURER
+  DISTRIBUTOR
+  TECHNOLOGY
+  STRATEGIC
+  EDUCATION
+  SERVICE
+  LOGISTICS
+  OTHER
+}
+
+enum MediaKind {
+  IMAGE
+  VIDEO
+  DOCUMENT
+  AUDIO
+  OTHER
+}
+
+/// PUBLIC assets are CDN-served. PRIVATE assets require an authorization check
+/// and are delivered by short-lived presigned URL — this is what makes the
+/// future distributor portal possible without a storage migration (§54).
+enum MediaVisibility {
+  PUBLIC
+  PRIVATE
+}
+
+enum MediaStatus {
+  PROCESSING
+  READY
+  FAILED
+}
+
+enum DocumentKind {
+  BROCHURE
+  CATALOG
+  MANUAL
+  CERTIFICATE
+  DATASHEET
+  PRESENTATION
+  COMPANY_PROFILE
+  TECHNICAL
+  POLICY
+  OTHER
+}
+
+enum ResourceType {
+  PDF
+  BROCHURE
+  CATALOG
+  MANUAL
+  CERTIFICATE
+  PRESENTATION
+  COMPANY_PROFILE
+  TECHNICAL_DOCUMENT
+  VIDEO
+  IMAGE
+}
+
+enum EventType {
+  CONFERENCE
+  EXHIBITION
+  SEMINAR
+  WORKSHOP
+  TRAINING
+  WEBINAR
+  OTHER
+}
+
+enum EventParticipation {
+  EXHIBITOR
+  VISITOR
+  SPEAKER
+  SPONSOR
+  ORGANIZER
+  PARTNER
+}
+
+enum AchievementCategory {
+  AWARD
+  CERTIFICATION
+  MILESTONE
+  PARTNERSHIP
+  BUSINESS
+  RECOGNITION
+}
+
+enum MenuItemTarget {
+  PAGE
+  PRODUCT
+  PRODUCT_CATEGORY
+  PARTNER
+  BRAND
+  SERVICE
+  EVENT
+  ARTICLE
+  ROUTE
+  EXTERNAL_URL
+  NONE
+}
+
+enum MenuLocation {
+  HEADER
+  FOOTER_PRIMARY
+  FOOTER_SECONDARY
+  FOOTER_LEGAL
+  MOBILE
+  SIDEBAR
+  CUSTOM
+}
+
+enum FormFieldType {
+  TEXT
+  EMAIL
+  PHONE
+  TEXTAREA
+  SELECT
+  CHECKBOX
+  RADIO
+  FILE
+  CONSENT
+  HIDDEN
+  DATE
+  NUMBER
+}
+
+enum InquiryType {
+  GENERAL
+  PRODUCT
+  PARTNER
+  SERVICE
+  DISTRIBUTION
+  CAREER
+  MEDIA
+  OTHER
+}
+
+enum InquiryStatus {
+  NEW
+  IN_PROGRESS
+  CONTACTED
+  RESOLVED
+  ARCHIVED
+  SPAM
+}
+
+enum AIProvider {
+  ANTHROPIC
+  OPENAI
+  /// OpenAI-compatible API, so it reuses the same adapter shape. Chat only —
+  /// Groq serves no embedding models, which is why the knowledge index can be
+  /// driven by a different provider from the chat.
+  GROQ
+}
+
+/// Task types routed independently to providers (§7.1).
+enum AITaskType {
+  PUBLIC_CHAT
+  TRANSLATE
+  SEO
+  SUMMARIZE
+  REWRITE
+  ALT_TEXT
+  AUDIT
+  EMBED
+  CLASSIFY
+}
+
+enum AIJobStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+  NEEDS_REVIEW
+  CANCELLED
+}
+
+enum AIActorKind {
+  PUBLIC_VISITOR
+  ADMIN_USER
+  SYSTEM
+}
+
+enum AIMessageRole {
+  SYSTEM
+  USER
+  ASSISTANT
+  TOOL
+}
+
+enum JobStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum SecurityEventType {
+  LOGIN_SUCCESS
+  LOGIN_FAILURE
+  LOGOUT
+  ACCOUNT_LOCKED
+  ACCOUNT_UNLOCKED
+  MFA_ENROLLED
+  MFA_DISABLED
+  MFA_FAILURE
+  RECOVERY_CODE_USED
+  PASSWORD_CHANGED
+  PASSWORD_RESET_REQUESTED
+  STEP_UP_SUCCESS
+  STEP_UP_FAILURE
+  SESSION_REVOKED
+  IP_BLOCKED
+  RATE_LIMIT_TRIPPED
+  AUTHORIZATION_DENIED
+  SUSPICIOUS_ACTIVITY
+  SETTINGS_CHANGED
+}
+
+enum ConsentCategory {
+  NECESSARY
+  ANALYTICS
+  MARKETING
+  PREFERENCES
+}
+
+enum NotificationKind {
+  NEW_INQUIRY
+  NEW_SUBMISSION
+  AI_JOB_COMPLETED
+  AI_JOB_FAILED
+  AI_BUDGET_WARNING
+  SECURITY_ALERT
+  SYSTEM_ERROR
+  CONTENT_SCHEDULED
+  CERTIFICATE_EXPIRING
+}
+
+// ============================================================================
+// IDENTITY AND SECURITY
+// ============================================================================
+
+model User {
+  id            String     @id @default(uuid()) @db.Uuid
+  email         String     @unique @db.Citext
+  passwordHash  String
+  name          String
+  role          UserRole   @default(VIEWER)
+  status        UserStatus @default(ACTIVE)
+  locale        String     @default("en")
+  avatarId      String?    @db.Uuid
+
+  // Lockout state (§4.2). Kept on the user so a lock survives Redis restarts.
+  failedLoginCount Int       @default(0)
+  lockedUntil      DateTime?
+  lastLoginAt      DateTime?
+  lastLoginIp      String?
+  passwordChangedAt DateTime @default(now())
+  mustChangePassword Boolean @default(false)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  avatar          MediaAsset?       @relation("UserAvatar", fields: [avatarId], references: [id], onDelete: SetNull)
+  sessions        Session[]
+  mfaCredentials  MfaCredential[]
+  recoveryCodes   RecoveryCode[]
+  loginAttempts   LoginAttempt[]
+  passwordHistory PasswordHistory[]
+  stepUpChallenges StepUpChallenge[]
+  auditLogs       AuditLog[]
+  securityEvents  SecurityEvent[]
+  notifications   Notification[]
+  aiConversations AIConversation[]
+  aiUsage         AIUsage[]
+  aiJobs          AIJob[]
+  contentVersions ContentVersion[]
+  inquiryNotes    InquiryNote[]
+  assignedInquiries Inquiry[]       @relation("InquiryAssignee")
+  apiKeys         ApiKey[]
+
+  @@index([role, status])
+  @@index([deletedAt])
+  @@map("users")
+}
+
+/// Opaque server-side session. The raw token never leaves the cookie; only its
+/// SHA-256 hash is stored, so a database leak does not yield usable sessions.
+model Session {
+  id                String   @id @default(uuid()) @db.Uuid
+  tokenHash         String   @unique
+  userId            String   @db.Uuid
+  /// Which host issued this session. An admin session is invalid on the public
+  /// host and vice versa (§10.1).
+  host              String
+
+  createdAt         DateTime @default(now())
+  lastSeenAt        DateTime @default(now())
+  /// Idle expiry — slides forward on activity.
+  expiresAt         DateTime
+  /// Absolute expiry — never extended.
+  absoluteExpiresAt DateTime
+
+  /// Set when MFA was satisfied for this session; null means MFA is pending.
+  mfaSatisfiedAt    DateTime?
+  /// Set when a step-up challenge was satisfied; scoped and short-lived (§4.3).
+  stepUpVerifiedAt  DateTime?
+  stepUpScope       String?
+
+  ip                String?
+  userAgent         String?
+  revokedAt         DateTime?
+  revokedReason     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model MfaCredential {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @db.Uuid
+  /// TOTP secret, encrypted at rest with ENCRYPTION_KEY. Never returned to a client.
+  secretEnc  String
+  label      String    @default("Authenticator")
+  confirmedAt DateTime?
+  /// Replay guard: the last accepted TOTP time-step counter.
+  lastUsedCounter BigInt @default(0)
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("mfa_credentials")
+}
+
+model RecoveryCode {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  codeHash  String
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, usedAt])
+  @@map("recovery_codes")
+}
+
+/// Every attempt, successful or not. Powers lockout, the security centre and
+/// forensic review. Retained per the security retention setting.
+model LoginAttempt {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String?  @db.Uuid
+  email     String   @db.Citext
+  success   Boolean
+  reason    String?
+  ip        String?
+  userAgent String?
+  host      String?
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([email, createdAt])
+  @@index([ip, createdAt])
+  @@index([createdAt])
+  @@map("login_attempts")
+}
+
+model PasswordHistory {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String   @db.Uuid
+  passwordHash String
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("password_history")
+}
+
+/// A single-use, short-lived proof that the user re-authenticated for a
+/// specific destructive action scope (§7).
+model StepUpChallenge {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  sessionId String    @db.Uuid
+  tokenHash String    @unique
+  scope     String
+  mfaUsed   Boolean   @default(false)
+  consumedAt DateTime?
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, scope, consumedAt])
+  @@index([expiresAt])
+  @@map("step_up_challenges")
+}
+
+/// Append-only. No application code path deletes from this table (§48).
+model AuditLog {
+  id          String     @id @default(uuid()) @db.Uuid
+  actorId     String?    @db.Uuid
+  actorRole   UserRole?
+  actorLabel  String?
+  action      String
+  entityType  EntityType?
+  entityId    String?
+  entityLabel String?
+  before      Json?
+  after       Json?
+  diff        Json?
+  locale      String?
+  ip          String?
+  userAgent   String?
+  requestId   String?
+  stepUpUsed  Boolean    @default(false)
+  success     Boolean    @default(true)
+  failureReason String?
+  createdAt   DateTime   @default(now())
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId, createdAt])
+  @@index([actorId, createdAt])
+  @@index([action, createdAt])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model SecurityEvent {
+  id        String            @id @default(uuid()) @db.Uuid
+  type      SecurityEventType
+  userId    String?           @db.Uuid
+  severity  String            @default("info")
+  message   String
+  metadata  Json?
+  ip        String?
+  userAgent String?
+  createdAt DateTime          @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([type, createdAt])
+  @@index([userId, createdAt])
+  @@index([createdAt])
+  @@map("security_events")
+}
+
+/// Machine credentials for future integrations. Secret is stored hashed.
+model ApiKey {
+  id          String    @id @default(uuid()) @db.Uuid
+  name        String
+  keyHash     String    @unique
+  prefix      String
+  scopes      String[]
+  createdById String?   @db.Uuid
+  lastUsedAt  DateTime?
+  expiresAt   DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  createdBy User? @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([revokedAt])
+  @@map("api_keys")
+}
+
+// ============================================================================
+// LOCALIZATION
+// ============================================================================
+
+/// Locales are data, not code. Enabling a fifth language is an insert plus a
+/// message catalogue — no release required (§2.1, §6).
+model Locale {
+  code        String        @id @db.VarChar(16)
+  /// BCP-47 tag used for Intl formatting, e.g. "zh-Hans" for the "zh" segment.
+  bcp47       String
+  nativeName  String
+  englishName String
+  direction   TextDirection @default(LTR)
+  enabled     Boolean       @default(true)
+  isDefault   Boolean       @default(false)
+  sortOrder   Int           @default(0)
+  flagEmoji   String?
+  /// Fallback chain applied per field when a translation is missing (§6.4).
+  fallbackTo  String?       @db.VarChar(16)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  uiTranslations UiTranslation[]
+
+  @@index([enabled, sortOrder])
+  @@map("locales")
+}
+
+/// Interface strings. Ships from message catalogues; rows here are Super Admin
+/// overrides that win at runtime, so copy changes do not need a deploy (§6.1).
+model UiTranslation {
+  id        String   @id @default(uuid()) @db.Uuid
+  locale    String   @db.VarChar(16)
+  namespace String
+  key       String
+  value     String
+  updatedById String? @db.Uuid
+  approvedById String?         @db.Uuid
+  approvedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  localeRef Locale @relation(fields: [locale], references: [code], onDelete: Cascade)
+
+  @@unique([locale, namespace, key])
+  @@index([namespace])
+  @@map("ui_translations")
+}
+
+// ============================================================================
+// SEO, VERSIONING, REDIRECTS  (polymorphic — pattern P2/P4)
+// ============================================================================
+
+model SeoMeta {
+  id          String     @id @default(uuid()) @db.Uuid
+  entityType  EntityType
+  entityId    String
+  locale      String     @db.VarChar(16)
+
+  title       String?
+  description String?
+  canonicalUrl String?
+  ogTitle     String?
+  ogDescription String?
+  ogImageId   String?    @db.Uuid
+  noindex     Boolean    @default(false)
+  nofollow    Boolean    @default(false)
+  /// Extra JSON-LD merged into the generated structured data for this entity.
+  structuredData Json?
+  keywords    String[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  ogImage MediaAsset? @relation("SeoOgImage", fields: [ogImageId], references: [id], onDelete: SetNull)
+
+  @@unique([entityType, entityId, locale])
+  @@index([entityType, entityId])
+  @@map("seo_meta")
+}
+
+/// Snapshot-based version history (§34). Written inside the mutation
+/// transaction, so a change can never exist without its version record.
+model ContentVersion {
+  id          String     @id @default(uuid()) @db.Uuid
+  entityType  EntityType
+  entityId    String
+  version     Int
+  snapshot    Json
+  diff        Json?
+  summary     String?
+  createdById String?    @db.Uuid
+  createdAt   DateTime   @default(now())
+
+  createdBy User? @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([entityType, entityId, version])
+  @@index([entityType, entityId, createdAt])
+  @@map("content_versions")
+}
+
+/// Written automatically when a published slug changes, so no edit breaks a
+/// live URL or an inbound link (§6.2).
+model Redirect {
+  id         String   @id @default(uuid()) @db.Uuid
+  fromPath   String   @unique
+  toPath     String
+  statusCode Int      @default(301)
+  locale     String?  @db.VarChar(16)
+  reason     String?
+  hitCount   Int      @default(0)
+  lastHitAt  DateTime?
+  enabled    Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  @@index([enabled])
+  @@map("redirects")
+}
+
+// ============================================================================
+// MEDIA LIBRARY
+// ============================================================================
+
+model MediaFolder {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  slug      String   @db.Citext
+  parentId  String?  @db.Uuid
+  path      String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deletedAt DateTime?
+
+  parent   MediaFolder?  @relation("FolderTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children MediaFolder[] @relation("FolderTree")
+  assets   MediaAsset[]
+
+  @@unique([parentId, slug])
+  @@index([path])
+  @@map("media_folders")
+}
+
+model MediaAsset {
+  id         String          @id @default(uuid()) @db.Uuid
+  kind       MediaKind
+  visibility MediaVisibility @default(PUBLIC)
+  status     MediaStatus     @default(PROCESSING)
+
+  /// Storage key inside the bucket. Randomised — never derived from the
+  /// uploaded filename, so a crafted name cannot traverse or collide.
+  storageKey   String  @unique
+  originalName String
+  mimeType     String
+  sizeBytes    Int
+  checksum     String?
+
+  width     Int?
+  height    Int?
+  durationMs Int?
+  blurhash  String?
+  /// Dominant colour, used for placeholder backgrounds.
+  dominantColor String?
+
+  folderId    String?  @db.Uuid
+  uploadedById String? @db.Uuid
+  processingError String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  folder       MediaFolder?            @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  variants     MediaVariant[]
+  translations MediaAssetTranslation[]
+  usages       MediaUsage[]
+  tags         MediaTagOnAsset[]
+
+  // Inverse relations for typed foreign keys elsewhere.
+  userAvatars        User[]              @relation("UserAvatar")
+  seoOgImages        SeoMeta[]           @relation("SeoOgImage")
+  partnerLogos       Partner[]           @relation("PartnerLogo")
+  partnerCovers      Partner[]           @relation("PartnerCover")
+  partnerMedia       PartnerMedia[]
+  partnerDocuments   PartnerDocument[]
+  brandLogos         Brand[]             @relation("BrandLogo")
+  brandCovers        Brand[]             @relation("BrandCover")
+  brandDocuments     BrandDocument[]
+  productMedia       ProductMedia[]
+  productDocuments   ProductDocument[]
+  serviceCovers      Service[]           @relation("ServiceCover")
+  serviceIcons       Service[]           @relation("ServiceIcon")
+  achievementImages  Achievement[]       @relation("AchievementImage")
+  achievementDocs    Achievement[]       @relation("AchievementDocument")
+  eventCovers        Event[]             @relation("EventCover")
+  eventMedia         EventMedia[]
+  speakerPhotos      EventSpeaker[]
+  articleCovers      Article[]           @relation("ArticleCover")
+  resourceFiles      Resource[]          @relation("ResourceFile")
+  resourceThumbs     Resource[]          @relation("ResourceThumbnail")
+  certificateFiles   Certificate[]       @relation("CertificateFile")
+  certificateThumbs  Certificate[]       @relation("CertificateThumbnail")
+  teamPhotos         TeamMember[]        @relation("TeamMemberPhoto")
+  testimonialAvatars Testimonial[]       @relation("TestimonialAvatar")
+  testimonialLogos   Testimonial[]       @relation("TestimonialLogo")
+  bannerImages       Banner[]            @relation("BannerImage")
+  bannerMobileImages Banner[]            @relation("BannerMobileImage")
+  officeImages       Office[]            @relation("OfficeImage")
+  milestoneImages    Milestone[]         @relation("MilestoneImage")
+  submissionFiles    FormSubmissionFile[]
+
+  @@index([kind, status, deletedAt])
+  @@index([folderId])
+  @@index([createdAt])
+  @@map("media_assets")
+}
+
+/// Generated renditions (AVIF/WebP/JPEG at responsive widths).
+model MediaVariant {
+  id        String   @id @default(uuid()) @db.Uuid
+  assetId   String   @db.Uuid
+  label     String
+  format    String
+  width     Int
+  height    Int
+  sizeBytes Int
+  storageKey String  @unique
+  createdAt DateTime @default(now())
+
+  asset MediaAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@unique([assetId, label, format])
+  @@index([assetId])
+  @@map("media_variants")
+}
+
+/// Alt text and captions are per-locale — accessibility and SEO both need them
+/// in the visitor's language (§33, §57).
+model MediaAssetTranslation {
+  id        String            @id @default(uuid()) @db.Uuid
+  assetId   String            @db.Uuid
+  locale    String            @db.VarChar(16)
+  alt       String?
+  caption   String?
+  title     String?
+  status    TranslationStatus @default(MISSING)
+  origin    TranslationOrigin @default(HUMAN)
+  sourceHash String?
+  approvedById String?        @db.Uuid
+  approvedAt DateTime?
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  asset MediaAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@unique([assetId, locale])
+  @@index([locale, status])
+  @@map("media_asset_translations")
+}
+
+/// Where an asset is actually used. Makes "delete" answerable rather than
+/// destructive-by-surprise (§33).
+model MediaUsage {
+  id         String     @id @default(uuid()) @db.Uuid
+  assetId    String     @db.Uuid
+  entityType EntityType
+  entityId   String
+  field      String
+  createdAt  DateTime   @default(now())
+
+  asset MediaAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@unique([assetId, entityType, entityId, field])
+  @@index([entityType, entityId])
+  @@map("media_usages")
+}
+
+model MediaTag {
+  id        String            @id @default(uuid()) @db.Uuid
+  name      String            @unique @db.Citext
+  createdAt DateTime          @default(now())
+  assets    MediaTagOnAsset[]
+
+  @@map("media_tags")
+}
+
+model MediaTagOnAsset {
+  assetId String @db.Uuid
+  tagId   String @db.Uuid
+
+  asset MediaAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  tag   MediaTag   @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([assetId, tagId])
+  @@index([tagId])
+  @@map("media_tags_on_assets")
+}
+
+// ============================================================================
+// PAGES AND THE MODULAR BLOCK SYSTEM  (§32)
+// ============================================================================
+
+model Page {
+  id          String        @id @default(uuid()) @db.Uuid
+  slug        String        @unique @db.Citext
+  /// Reserved system pages (home, contact, search) cannot be deleted, only
+  /// edited — deleting them would break routing.
+  systemKey   String?       @unique
+  status      ContentStatus @default(DRAFT)
+  publishedAt DateTime?
+  scheduledAt DateTime?
+  /// Template hint for the renderer; blocks still drive the actual content.
+  template    String        @default("default")
+  showInSitemap Boolean     @default(true)
+  requiresAuth  Boolean     @default(false)
+  sortOrder   Int           @default(0)
+
+  createdById String?   @db.Uuid
+  updatedById String?   @db.Uuid
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  deletedById String?   @db.Uuid
+
+  translations PageTranslation[]
+  blocks       PageBlock[]
+  menuItems    MenuItem[]
+
+  @@index([status, publishedAt])
+  @@index([deletedAt])
+  @@map("pages")
+}
+
+model PageTranslation {
+  id        String            @id @default(uuid()) @db.Uuid
+  pageId    String            @db.Uuid
+  locale    String            @db.VarChar(16)
+  /// Per-locale slug. Falls back to Page.slug when absent (§6.2).
+  slug      String?           @db.Citext
+  title     String
+  subtitle  String?
+  summary   String?
+
+  status     TranslationStatus @default(MISSING)
+  origin     TranslationOrigin @default(HUMAN)
+  sourceHash String?
+  approvedById String?         @db.Uuid
+  approvedAt DateTime?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  page Page @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@unique([pageId, locale])
+  @@unique([locale, slug])
+  @@index([locale, status])
+  @@map("page_translations")
+}
+
+/// A block is `type` + `props`. New block types are registered in code and
+/// become available immediately — no migration (§32).
+model PageBlock {
+  id        String   @id @default(uuid()) @db.Uuid
+  pageId    String   @db.Uuid
+  type      String
+  sortOrder Int      @default(0)
+  enabled   Boolean  @default(true)
+  /// Locale-independent configuration: layout, selected entity ids, limits,
+  /// colour variant, image ids.
+  props     Json     @default("{}")
+  /// Optional anchor id so menus can deep-link to a section.
+  anchor    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  page         Page                   @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  translations PageBlockTranslation[]
+
+  @@index([pageId, sortOrder])
+  @@map("page_blocks")
+}
+
+model PageBlockTranslation {
+  id        String            @id @default(uuid()) @db.Uuid
+  blockId   String            @db.Uuid
+  locale    String            @db.VarChar(16)
+  /// Localized text props only: heading, body, CTA label, item labels.
+  props     Json              @default("{}")
+  status    TranslationStatus @default(MISSING)
+  origin    TranslationOrigin @default(HUMAN)
+  sourceHash String?
+  approvedById String?        @db.Uuid
+  approvedAt DateTime?
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  block PageBlock @relation(fields: [blockId], references: [id], onDelete: Cascade)
+
+  @@unique([blockId, locale])
+  @@index([locale, status])
+  @@map("page_block_translations")
+}
+
+// ============================================================================
+// NAVIGATION  (§3 — navigation is data, never hardcoded)
+// ============================================================================
+
+model Menu {
+  id        String       @id @default(uuid()) @db.Uuid
+  key       String       @unique
+  name      String
+  location  MenuLocation @default(HEADER)
+  enabled   Boolean      @default(true)
+  /// System menus (main header, primary footer) are protected from deletion.
+  isSystem  Boolean      @default(false)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  deletedAt DateTime?
+
+  items MenuItem[]
+
+  @@index([location, enabled])
+  @@map("menus")
+}
+
+model MenuItem {
+  id        String         @id @default(uuid()) @db.Uuid
+  menuId    String         @db.Uuid
+  parentId  String?        @db.Uuid
+  sortOrder Int            @default(0)
+  enabled   Boolean        @default(true)
+
+  target        MenuItemTarget @default(NONE)
+  /// Populated according to `target`. Exactly one is meaningful at a time;
+  /// validation is enforced in the use-case.
+  pageId        String?        @db.Uuid
+  productId     String?        @db.Uuid
+  productCategoryId String?    @db.Uuid
+  partnerId     String?        @db.Uuid
+  brandId       String?        @db.Uuid
+  serviceId     String?        @db.Uuid
+  eventId       String?        @db.Uuid
+  articleId     String?        @db.Uuid
+  /// Internal route key (e.g. "products.index") or an absolute external URL.
+  routeKey      String?
+  externalUrl   String?
+  openInNewTab  Boolean        @default(false)
+  rel           String?
+
+  icon          String?
+  highlight     Boolean        @default(false)
+  /// Restrict this item to specific locales. Empty = all enabled locales.
+  visibleLocales String[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  menu            Menu                 @relation(fields: [menuId], references: [id], onDelete: Cascade)
+  parent          MenuItem?            @relation("MenuTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children        MenuItem[]           @relation("MenuTree")
+  page            Page?                @relation(fields: [pageId], references: [id], onDelete: SetNull)
+  product         Product?             @relation(fields: [productId], references: [id], onDelete: SetNull)
+  productCategory ProductCategory?     @relation(fields: [productCategoryId], references: [id], onDelete: SetNull)
+  partner         Partner?             @relation(fields: [partnerId], references: [id], onDelete: SetNull)
+  brand           Brand?               @relation(fields: [brandId], references: [id], onDelete: SetNull)
+  service         Service?             @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  event           Event?               @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  article         Article?             @relation(fields: [articleId], references: [id], onDelete: SetNull)
+  translations    MenuItemTranslation[]
+
+  @@index([menuId, parentId, sortOrder])
+  @@map("menu_items")
+}
+
+model MenuItemTranslation {
+  id        String            @id @default(uuid()) @db.Uuid
+  itemId    String            @db.Uuid
+  locale    String            @db.VarChar(16)
+  label     String
+  description String?
+  ariaLabel String?
+  status    TranslationStatus @default(MISSING)
+  origin    TranslationOrigin @default(HUMAN)
+  sourceHash String?
+  approvedById String?         @db.Uuid
+  approvedAt DateTime?
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  item MenuItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@unique([itemId, locale])
+  @@index([locale, status])
+  @@map("menu_item_translations")
+}
+
+// ============================================================================
+// PARTNERS  (§10 — a real directory, not a logo wall)
+// ============================================================================
+
+model Partner {
+  id          String        @id @default(uuid()) @db.Uuid
+  slug        String        @unique @db.Citext
+  legalName   String?
+  displayName String
+  status      ContentStatus @default(DRAFT)
+  publishedAt DateTime?
+
+  partnershipType PartnershipType @default(OTHER)
+  partnershipStart DateTime?
+  foundedYear     Int?
+
+  countryCode String? @db.VarChar(2)
+  city        String?
+  addressLine String?
+  postalCode  String?
+  latitude    Float?
+  longitude   Float?
+
+  website String?
+  email   String?
+  phone   String?
+
+  logoId  String? @db.Uuid
+  coverId String? @db.Uuid
+
+  /// "Verified" means the company has confirmed the relationship internally.
+  /// It is an editorial flag, never inferred, never auto-set.
+  verified   Boolean @default(false)
+  verifiedAt DateTime?
+  featured   Boolean @default(false)
+  sortOrder  Int     @default(0)
+
+  viewCount Int @default(0)
+
+  createdById String?   @db.Uuid
+  updatedById String?   @db.Uuid
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  deletedById String?   @db.Uuid
+
+  logo   MediaAsset? @relation("PartnerLogo", fields: [logoId], references: [id], onDelete: SetNull)
+  cover  MediaAsset? @relation("PartnerCover", fields: [coverId], references: [id], onDelete: SetNull)
+
+  translations  PartnerTranslation[]
+  categories    PartnerCategoryOnPartner[]
+  documents     PartnerDocument[]
+  media         PartnerMedia[]
+  socialLinks   SocialLink[]
+  brands        Brand[]
+  products      Product[]
+  certificates  Certificate[]
+  achievements  Achievement[]
+  services      ServiceOnPartner[]
+  events        PartnerOnEvent[]
+  articles      PartnerOnArticle[]
+  resources     Resource[]
+  inquiries     Inquiry[]
+  menuItems     MenuItem[]
+  testimonials  Testimonial[]
+
+  @@index([status, publishedAt])
+  @@index([countryCode])
+  @@index([partnershipType])
+  @@index([featured, sortOrder])
+  @@index([deletedAt])
+  @@map("partners")
+}
+
+model PartnerTranslation {
+  id        String  @id @default(uuid()) @db.Uuid
+  partnerId String  @db.Uuid
+  locale    String  @db.VarChar(16)
+  slug      String? @db.Citext
+
+  name             String
+  shortDescription String?
+  description      Json?
+  specialization   String?
+  /// Free-form bullet points; stored as an array so the CMS can reorder them.
+  highlights       String[]
+  addressLocalized String?
+
+  status     TranslationStatus @default(MISSING)
+  origin     TranslationOrigin @default(HUMAN)
+  sourceHash String?
+  approvedById String?         @db.Uuid
+  approvedAt DateTime?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  partner Partner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+
+  @@unique([partnerId, locale])
+  @@unique([locale, slug])
+  @@index([locale, status])
+  @@map("partner_translations")
+}
+
+model PartnerCategory {
+  id        String   @id @default(uuid()) @db.Uuid
+  slug      String   @unique @db.Citext
+  parentId  String?  @db.Uuid
+  sortOrder Int      @default(0)
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deletedAt DateTime?
+
+  parent       PartnerCategory?            @relation("PartnerCategoryTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children     PartnerCategory[]           @relation("PartnerCategoryTree")
+  translations PartnerCategoryTranslation[]
+  partners     PartnerCategoryOnPartner[]
+
+  @@index([parentId, sortOrder])
+  @@map("partner_categories")
+}
+
+model PartnerCategoryTranslation {
+  id         String            @id @default(uuid()) @db.Uuid
+  categoryId String            @db.Uuid
+  locale     String            @db.VarChar(16)
+  slug       String?           @db.Citext
+  name       String
+  description String?
+  status     TranslationStatus @default(MISSING)
+  origin     TranslationOrigin @default(HUMAN)
+  sourceHash String?
+  approvedById String?         @db.Uuid
+  approvedAt DateTime?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  category PartnerCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([categoryId, locale])
+  @@index([locale, status])
+  @@map("partner_category_translations")
+}
+
+model PartnerCategoryOnPartner {
+  partnerId  String @db.Uuid
+  categoryId String @db.Uuid
+
+  partner  Partner         @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  category PartnerCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@id([partnerId, categoryId])
+  @@index([categoryId])
+  @@map("partner_categories_on_partners")
+}
+
+model PartnerDocument {
+  id        String       @id @default(uuid()) @db.Uuid
+  partnerId String       @db.Uuid
+  assetId   String       @db.Uuid
+  kind      DocumentKind @default(OTHER)
+  title     String
+  /// Locale this document is written in; null means language-neutral.
+  locale    String?      @db.VarChar(16)
+  sortOrder Int          @default(0)
+  createdAt DateTime     @default(now())
+
+  partner Partner    @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  asset   MediaAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@index([partnerId, sortOrder])
+  @@map("partner_documents")
+}
+
+model PartnerMedia {
+  id        String   @id @default(uuid()) @db.Uuid
+  partnerId String   @db.Uuid
+  assetId   String   @db.Uuid
+  /// "gallery" | "video"
+  role      String   @default("gallery")
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  partner Partner    @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  asset   MediaAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@unique([partnerId, assetId, role])
+  @@index([partnerId, sortOrder])
+  @@map("partner_media")
+}
+
+// ============================================================================
+// BRANDS  (§11)
+// ============================================================================
+
+model Brand {
+  id        String        @id @default(uuid()) @db.Uuid
+  slug      String        @unique @db.Citext
+  name      String
+  status    ContentStatus @default(DRAFT)
+  publishedAt DateTime?
+
+  partnerId   String? @db.Uuid
+  countryCode String? @db.VarChar(2)
+  website     String?
+  foundedYear Int?
+
+  logoId  String? @db.Uuid
+  coverId String? @db.Uuid
+
+  featured  Boolean @default(false)
+  sortOrder Int     @default(0)
+  viewCount Int     @default(0)
+
+  createdById String?   @db.Uuid
+  updatedById String?   @db.Uuid
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  deletedById String?   @db.Uuid
+
+  partner Partner?    @relation(fields: [partnerId], references: [id], onDelete: SetNull)
+  logo    MediaAsset? @relation("BrandLogo", fields: [logoId], references: [id], onDelete: SetNull)
+  cover   MediaAsset? @relation("BrandCover", fields: [coverId], references: [id], onDelete: SetNull)
+
+  translations BrandTranslation[]
+  documents    BrandDocument[]
+  products     Product[]
+  certificates Certificate[]
+  socialLinks  SocialLink[]
+  menuItems    MenuItem[]
+
+  @@index([status, publishedAt])
+  @@index([partnerId])
+  @@index([featured, sortOrder])
+  @@index([deletedAt])
+  @@map("brands")
+}
+
+model BrandTranslation {
+  id      String  @id @default(uuid()) @db.Uuid
+  brandId String  @db.Uuid
+  locale  String  @db.VarChar(16)
+  slug    String? @db.Citext
+
+  name             String
+  shortDescription String?
+  description      Json?
+  tagline          String?
+
+  status     TranslationStatus @default(MISSING)
+  origin     TranslationOrigin @default(HUMAN)
+  sourceHash String?
+  approvedById String?         @db.Uuid
+  approvedAt DateTime?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  brand Brand @relation(fields: [brandId], references: [id], onDelete: Cascade)
+
+  @@unique([brandId, locale])
+  @@unique([locale, slug])
+  @@index([locale, status])
+  @@map("brand_translations")
+}
+
+model BrandDocument {
+  id        String       @id @default(uuid()) @db.Uuid
+  brandId   String       @db.Uuid
+  assetId   String       @db.Uuid
+  kind      DocumentKind @default(OTHER)
+  title     String
+  locale    String?      @db.VarChar(16)
+  sortOrder Int          @default(0)
+  createdAt DateTime     @default(now())
+
+  brand Brand      @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  asset MediaAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@index([brandId, sortOrder])
+  @@map("brand_documents")
+}
+
+// ============================================================================
+// PRODUCT CATALOGUE  (§12, §13, §53, §54)
+//
+// The product model already carries the commercial fields a future B2B module
+// needs (unit, packaging, MOQ, HS code, lead time) without exposing any of
+// them publicly at launch. Pricing, stock and orders live in separate tables
+// that do not exist yet — adding them does not touch this one.
+// ============================================================================
+
+model Product {
+  id        String        @id @default(uuid()) @db.Uuid
+  slug      String        @unique @db.Citext
+  sku       String?       @unique
+  productCode String?
+  gtin      String?
+  status    ContentStatus @default(DRAFT)
+  publishedAt DateTime?
+  scheduledAt DateTime?
+
+  brandId        String? @db.Uuid
+  partnerId      String? @db.Uuid
+  manufacturer   String?
+  countryOfOrigin String? @db.VarChar(2)
+
+  // Commercial descriptors — visible in the catalogue, reusable by B2B later.
+  unit           String?
+  packaging      String?
+  minOrderQty    Int?
+  leadTimeDays   Int?
+  hsCode         String?
+  weightGrams    Int?
+
+  featured   Boolean @default(false)
+  isNew      Boolean @default(false)
+  visibility MediaVisibility @default(PUBLIC)
+  sortOrder  Int     @default(0)
+  viewCount  Int     @default(0)
+  inquiryCount Int   @default(0)
+
+  createdById String?   @db.Uuid
+  updatedById String?   @db.Uuid
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  deletedById String?   @db.Uuid
+
+  brand   Brand?   @relation(fields: [brandId], references: [id], onDelete: SetNull)
+  partner Partner? @relation(fields: [partnerId], references: [id], onDelete: SetNull)
+
+  translations   ProductTranslation[]
+  categories     ProductCategoryOnProduct[]
+  media          ProductMedia[]
+  documents      ProductDocument[]
+  specifications ProductSpecification[]
+  attributeValues ProductAttributeValue[]
+  certificates   Certificate[]
+
+  relatedFrom ProductRelation[] @relation("RelationSource")
+  relatedTo   ProductRelation[] @relation("RelationTarget")
+
+  services  ProductOnService[]
+  events    ProductOnEvent[]
+  resources ProductOnResource[]
+  articles  ProductOnArticle[]
+  inquiries Inquiry[]
+  menuItems MenuItem[]
+
+  @@index([status, publishedAt])
+  @@index([brandId, status])
+  @@index([partnerId, status])
+  @@index([featured, sortOrder])
+  @@index([countryOfOrigin])
+  @@index([deletedAt])
+  @@map("products")
+}
+
+model ProductTranslation {
+  id        String  @id @default(uuid()) @db.Uuid
+  productId String  @db.Uuid
+  locale    String  @db.VarChar(16)
+  slug      String? @db.Citext
+
+  name             String
+  shortDescription String?
+  /// Rich text stored as a structured JSON document, not raw HTML — this is
+  /// what lets the AI translator preserve formatting and product codes safely.
+  description      Json?
+  benefits         String[]
+  applications     String[]
+  indications      String[]
+  compatibility    String?
+  usageNotes       Json?
+
+  status     TranslationStatus @default(MISSING)
+  origin     TranslationOrigin @default(HUMAN)
+  sourceHash String?
+  approvedById String?         @db.Uuid
+  approvedAt DateTime?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, locale])
+  @@unique([locale, slug])
+  @@index([locale, status])
+  @@map("product_translations")
+}
+
+model ProductCategory {
+  id        String   @id @default(uuid()) @db.Uuid
+  slug      String   @unique @db.Citext
+  parentId  String?  @db.Uuid
+  /// Materialised path ("dental-materials/restorative") for fast subtree
+  /// queries and clean category URLs.
+  path      String
+  depth     Int      @default(0)
+  iconKey   String?
+  sortOrder Int      @default(0)
+  enabled   Boolean  @default(true)
+  featured  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deletedAt DateTime?
+
+  parent       ProductCategory?             @relation("ProductCategoryTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children     ProductCategory[]            @relation("ProductCategoryTree")
+  translations ProductCategoryTranslation[]
+  products     ProductCategoryOnProduct[]
+  menuItems    MenuItem[]
+
+  @@index([parentId, sortOrder])
+  @@index([path])
+  @@map("product_categories")
+}
+
+model ProductCategoryTranslation {
+  id         String            @id @default(uuid()) @db.Uuid
+  categoryId String            @db.Uuid
+  locale     String            @db.VarChar(16)
+  slug       String?           @db.Citext
+  name       String
+  description Json?
+  status     TranslationStatus @default(MISSING)
+  origin     TranslationOrigin @default(HUMAN)
+  sourceHash String?
+  approvedById String?         @db.Uuid
+  approvedAt DateTime?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  category ProductCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([categoryId, locale])
+  @@unique([locale, slug])
+  @@index([locale, status])
+  @@map("product_category_translations")
+}
+
+model ProductCategoryOnProduct {
+  productId  String  @db.Uuid
+  categoryId String  @db.Uuid
+  /// Exactly one primary category per product drives breadcrumbs and canonical
+  /// category URL; additional categories are secondary placements.
+  isPrimary  Boolean @default(false)
+
+  product  Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  category ProductCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@id([productId, categoryId])
+  @@index([categoryId, isPrimary])
+  @@map("product_categories_on_products")
+}
+
+model ProductMedia {
+  id        String   @id @default(uuid()) @db.Uuid
+  productId String   @db.Uuid
+  assetId   String   @db.Uuid
+  /// "primary" | "gallery" | "video" | "diagram"
+  role      String   @default("gallery")
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  product Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  asset   MediaAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, assetId, role])
+  @@index([productId, sortOrder])
+  @@map("product_media")
+}
+
+model ProductDocument {
+  id        String       @id @default(uuid()) @db.Uuid
+  productId String       @db.Uuid
+  assetId   String       @db.Uuid
+  kind      DocumentKind @default(OTHER)
+  title     String
+  locale    String?      @db.VarChar(16)
+  sortOrder Int          @default(0)
+  downloadCount Int      @default(0)
+  createdAt DateTime     @default(now())
+
+  product Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  asset   MediaAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@index([productId, sortOrder])
+  @@map("product_documents")
+}
+
+/// Technical specifications. `group` allows the detail page to render tabbed
+/// or sectioned spec tables. Values stay strings so units and ranges
+/// ("1.8–2.2 mm") survive translation untouched.
+model ProductSpecification {
+  id        String   @id @default(uuid()) @db.Uuid
+  productId String   @db.Uuid
+  groupKey  String   @default("general")
+  labelKey  String
+  /// Fallback label when no translation exists.
+  label     String
+  value     String
+  unit      String?
+  sortOrder Int      @default(0)
+  /// Localized label/value overrides keyed by locale: { "ru": {label, value} }
+  localized Json?
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId, groupKey, sortOrder])
+  @@map("product_specifications")
+}
+
+/// Extensible facet definitions (§53). Adding "treatment area" as a filter is
+/// an admin action, not a migration.
+model ProductAttribute {
+  id         String   @id @default(uuid()) @db.Uuid
+  key        String   @unique
+  /// "select" | "multiselect" | "boolean" | "number" | "text"
+  dataType   String   @default("select")
+  filterable Boolean  @default(true)
+  sortOrder  Int      @default(0)
+  /// Allowed options with localized labels:
+  /// [{ "value": "endodontics", "labels": { "en": "Endodontics", ... } }]
+  options    Json?
+  labels     Json?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  values ProductAttributeValue[]
+
+  @@index([filterable, sortOrder])
+  @@map("product_attributes")
+}
+
+model ProductAttributeValue {
+  id          String  @id @default(uuid()) @db.Uuid
+  productId   String  @db.Uuid
+  attributeId String  @db.Uuid
+  valueString String?
+  valueNumber Float?
+  valueBool   Boolean?
+
+  product   Product          @relation(fields: [productId], references: [id], onDelete: Cascade)
+  attribute ProductAttribute @relation(fields: [attributeId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, attributeId, valueString])
+  @@index([attributeId, valueString])
+  @@map("product_attribute_values")
+}
+
+/// Typed, directional product relations ("accessory", "consumable",
+/// "alternative", "related"). Editorial, never inferred.
+model ProductRelation {
+  sourceId  String   @db.Uuid
+  targetId  String   @db.Uuid
+  kind      String   @default("related")
+  sortOrder Int      @default(0)
+
+  source Product @relation("RelationSource", fields: [sourceId], references: [id], onDelete: Cascade)
+  target Product @relation("RelationTarget", fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@id([sourceId, targetId, kind])
+  @@index([targetId])
+  @@map("product_relations")
+}
+
+// ============================================================================
+// SERVICES  (§14)
+// ============================================================================
+
+model Service {
+  id          String        @id @default(uuid()) @db.Uuid
+  slug        String        @unique @db.Citext
+  status      ContentStatus @default(DRAFT)
+  publishedAt DateTime?
+
+  iconKey  String?
+  iconId   String? @db.Uuid
+  coverId  String? @db.Uuid
+
+  featured  Boolean @default(false)
+  sortOrder Int     @default(0)
+  viewCount Int     @default(0)
+
+  createdById String?   @db.Uuid
+  updatedById String?   @db.Uuid
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  deletedById String?   @db.Uuid
+
+  icon  MediaAsset? @relation("ServiceIcon", fields: [iconId], references: [id], onDelete: SetNull)
+  cover MediaAsset? @relation("ServiceCover", fields: [coverId], references: [id], onDelete: SetNull)
+
+  translations ServiceTranslation[]
+  faqs         Faq[]
+  products     ProductOnService[]
+  partners     ServiceOnPartner[]
+  inquiries    Inquiry[]
+  menuItems    MenuItem[]
+
+  @@index([status, publishedAt])
+  @@index([featured, sortOrder])
+  @@index([deletedAt])
+  @@map("services")
+}
+
+model ServiceTranslation {
+  id        String  @id @default(uuid()) @db.Uuid
+  serviceId String  @db.Uuid
+  locale    String  @db.VarChar(16)
+  slug      String? @db.Citext
+
+  name             String
+  shortDescription String?
+  description      Json?
+  benefits         String[]
+  /// Ordered process steps: [{ "title": "...", "description": "..." }]
+  processSteps     Json?
+  ctaLabel         String?
+
+  status     TranslationStatus @default(MISSING)
+  origin     TranslationOrigin @default(HUMAN)
+  sourceHash String?
+  approvedById String?         @db.Uuid
+  approvedAt DateTime?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@unique([serviceId, locale])
+  @@unique([locale, slug])
+  @@index([locale, status])
+  @@map("service_translations")
+}
+
+model ProductOnService {
+  productId String @db.Uuid
+  serviceId String @db.Uuid
+  sortOrder Int    @default(0)
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@id([productId, serviceId])
+  @@index([serviceId])
+  @@map("products_on_services")
+}
+
+model ServiceOnPartner {
+  serviceId String @db.Uuid
+  partnerId String @db.Uuid
+
+  service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  partner Partner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+
+  @@id([serviceId, partnerId])
+  @@index([partnerId])
+  @@map("services_on_partners")
+}
+
+// ============================================================================
+// ACHIEVEMENTS  (§15)
+// ============================================================================
+
+model Achievement {
+  id          String              @id @default(uuid()) @db.Uuid
+  slug        String              @unique @db.Citext
+  status      ContentStatus       @default(DRAFT)
+  publishedAt DateTime?
+  category    AchievementCategory @default(MILESTONE)
+
+  achievedOn  DateTime?
+  location    String?
+  countryCode String?  @db.VarChar(2)
+  externalUrl String?
+  partnerId   String?  @db.Uuid
+  imageId     String?  @db.Uuid
+  documentId  String?  @db.Uuid
+
+  featured  Boolean @default(false)
+  sortOrder Int     @default(0)
+
+  createdById String?   @db.Uuid
+  updatedById String?   @db.Uuid
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  deletedById String?   @db.Uuid
+
+  partner  Partner?    @relation(fields: [partnerId], references: [id], onDelete: SetNull)
+  image    MediaAsset? @relation("AchievementImage", fields: [imageId], references: [id], onDelete: SetNull)
+  document MediaAsset? @relation("AchievementDocument", fields: [documentId], references: [id], onDelete: SetNull)
+
+  translations AchievementTranslation[]
+
+  @@index([status, achievedOn])
+  @@index([category])
+  @@index([deletedAt])
+  @@map("achievements")
+}
+
+model AchievementTranslation {
+  id            String  @id @default(uuid()) @db.Uuid
+  achievementId String  @db.Uuid
+  locale        String  @db.VarChar(16)
+  slug          String? @db.Citext
+
+  title       String
+  description Json?
+  issuer      String?
+
+  status     TranslationStatus @default(MISSING)
+  origin     TranslationOrigin @default(HUMAN)
+  sourceHash String?
+  approvedById String?         @db.Uuid
+  approvedAt DateTime?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  achievement Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+
+  @@unique([achievementId, locale])
+  @@unique([locale, slug])
+  @@index([locale, status])
+  @@map("achievement_translations")
+}
+
+// ============================================================================
+// CONFERENCES AND EVENTS  (§16)
+// ============================================================================
+
+model Event {
+  id          String        @id @default(uuid()) @db.Uuid
+  slug        String        @unique @db.Citext
+  status      ContentStatus @default(DRAFT)
+  publishedAt DateTime?
+
+  type          EventType          @default(CONFERENCE)
+  participation EventParticipation @default(VISITOR)
+
+  startDate DateTime
+  endDate   DateTime?
+  timezone  String   @default("UTC")
+
+  countryCode String? @db.VarChar(2)
+  city        String?
+  venue       String?
+  addressLine String?
+  latitude    Float?
+  longitude   Float?
+
+  organizer   String?
+  website     String?
+  boothNumber String?
+  coverId     String? @db.Uuid
+
+  featured  Boolean @default(false)
+  viewCount Int     @default(0)
+
+  createdById String?   @db.Uuid
+  updatedById String?   @db.Uuid
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  deletedById String?   @db.Uuid
+
+  cover MediaAsset? @relation("EventCover", fields: [coverId], references: [id], onDelete: SetNull)
+
+  translations EventTranslation[]
+  media        EventMedia[]
+  speakers     EventSpeaker[]
+  partners     PartnerOnEvent[]
+  products     ProductOnEvent[]
+  articles     ArticleOnEvent[]
+  menuItems    MenuItem[]
+
+  @@index([status, startDate])
+  @@index([type, startDate])
+  @@index([featured])
+  @@index([deletedAt])
+  @@map("events")
+}
+
+model EventTranslation {
+  id      String  @id @default(uuid()) @db.Uuid
+  eventId String  @db.Uuid
+  locale  String  @db.VarChar(16)
+  slug    String? @db.Citext
+
+  title            String
+  shortDescription String?
+  description      Json?
+  /// Post-event write-up, published after the event concludes.
+  summary          Json?
+  participationNote String?
+  venueLocalized   String?
+
+  status     TranslationStatus @default(MISSING)
+  origin     TranslationOrigin @default(HUMAN)
+  sourceHash String?
+  approvedById String?         @db.Uuid
+  approvedAt DateTime?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, locale])
+  @@unique([locale, slug])
+  @@index([locale, status])
+  @@map("event_translations")
+}
+
+model EventMedia {
+  id        String   @id @default(uuid()) @db.Uuid
+  eventId   String   @db.Uuid
+  assetId   String   @db.Uuid
+  role      String   @default("gallery")
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  event Event      @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  asset MediaAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, assetId, role])
+  @@index([eventId, sortOrder])
+  @@map("event_media")
+}
+
+model EventSpeaker {
+  id        String   @id @default(uuid()) @db.Uuid
+  eventId   String   @db.Uuid
+  name      String
+  title     String?
+  organization String?
+  photoId   String?  @db.Uuid
+  /// Localized bio keyed by locale: { "en": "...", "ru": "..." }
+  bio       Json?
+  sortOrder Int      @default(0)
+
+  event Event       @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  photo MediaAsset? @relation(fields: [photoId], references: [id], onDelete: SetNull)
+
+  @@index([eventId, sortOrder])
+  @@map("event_speakers")
+}
+
+model PartnerOnEvent {
+  partnerId String @db.Uuid
+  eventId   String @db.Uuid
+
+  partner Partner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  event   Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@id([partnerId, eventId])
+  @@index([eventId])
+  @@map("partners_on_events")
+}
+
+model ProductOnEvent {
+  productId String @db.Uuid
+  eventId   String @db.Uuid
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  event   Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@id([productId, eventId])
+  @@index([eventId])
+  @@map("products_on_events")
+}
+
+// ============================================================================
+// NEWS AND PUBLISHING  (§17)
+// ============================================================================
+
+model Article {
+  id          String        @id @default(uuid()) @db.Uuid
+  slug        String        @unique @db.Citext
+  status      ContentStatus @default(DRAFT)
+  publishedAt DateTime?
+  scheduledAt DateTime?
+
+  categoryId String? @db.Uuid
+  coverId    String? @db.Uuid
+  /// Author is free text so external contributors can be credited without a
+  /// user account; `authorUserId` links an internal author when there is one.
+  authorName   String?
+  authorUserId String? @db.Uuid
+
+  featured  Boolean @default(false)
+  viewCount Int     @default(0)
+
+  createdById String?   @db.Uuid
+  updatedById String?   @db.Uuid
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  deletedById String?   @db.Uuid
+
+  category ArticleCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  cover    MediaAsset?      @relation("ArticleCover", fields: [coverId], references: [id], onDelete: SetNull)
+
+  translations ArticleTranslation[]
+  tags         ArticleTag[]
+  products     ProductOnArticle[]
+  partners     PartnerOnArticle[]
+  events       ArticleOnEvent[]
+  menuItems    MenuItem[]
+
+  @@index([status, publishedAt])
+  @@index([categoryId, status])
+  @@index([featured])
+  @@index([deletedAt])
+  @@map("articles")
+}
+
+model ArticleTranslation {
+  id        String  @id @default(uuid()) @db.Uuid
+  articleId String  @db.Uuid
+  locale    String  @db.VarChar(16)
+  slug      String? @db.Citext
+
+  title   String
+  excerpt String?
+  content Json?
+  /// Computed on save from content length; stored so listings need no parsing.
+  readingMinutes Int?
+
+  status     TranslationStatus @default(MISSING)
+  origin     TranslationOrigin @default(HUMAN)
+  sourceHash String?
+  approvedById String?         @db.Uuid
+  approvedAt DateTime?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  article Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+
+  @@unique([articleId, locale])
+  @@unique([locale, slug])
+  @@index([locale, status])
+  @@map("article_translations")
+}
+
+model ArticleCategory {
+  id        String   @id @default(uuid()) @db.Uuid
+  slug      String   @unique @db.Citext
+  sortOrder Int      @default(0)
+  enabled   Boolean  @default(true)
+  /// Localized names keyed by locale.
+  names     Json     @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deletedAt DateTime?
+
+  articles Article[]
+
+  @@map("article_categories")
+}
+
+model Tag {
+  id        String       @id @default(uuid()) @db.Uuid
+  slug      String       @unique @db.Citext
+  /// Localized labels keyed by locale.
+  labels    Json         @default("{}")
+  createdAt DateTime     @default(now())
+  articles  ArticleTag[]
+
+  @@map("tags")
+}
+
+model ArticleTag {
+  articleId String @db.Uuid
+  tagId     String @db.Uuid
+
+  article Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  tag     Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([articleId, tagId])
+  @@index([tagId])
+  @@map("article_tags")
+}
+
+model ProductOnArticle {
+  productId String @db.Uuid
+  articleId String @db.Uuid
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  article Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+
+  @@id([productId, articleId])
+  @@index([articleId])
+  @@map("products_on_articles")
+}
+
+model PartnerOnArticle {
+  partnerId String @db.Uuid
+  articleId String @db.Uuid
+
+  partner Partner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  article Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+
+  @@id([partnerId, articleId])
+  @@index([articleId])
+  @@map("partners_on_articles")
+}
+
+model ArticleOnEvent {
+  articleId String @db.Uuid
+  eventId   String @db.Uuid
+
+  article Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  event   Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@id([articleId, eventId])
+  @@index([eventId])
+  @@map("articles_on_events")
+}
+
+// ============================================================================
+// RESOURCE CENTRE  (§18)
+// ============================================================================
+
+model Resource {
+  id          String        @id @default(uuid()) @db.Uuid
+  slug        String        @unique @db.Citext
+  type        ResourceType  @default(PDF)
+  status      ContentStatus @default(DRAFT)
+  publishedAt DateTime?
+
+  fileId      String? @db.Uuid
+  thumbnailId String? @db.Uuid
+  externalUrl String?
+
+  /// Language of the document itself; null means language-neutral.
+  contentLocale String? @db.VarChar(16)
+  partnerId     String? @db.Uuid
+  categoryKey   String?
+
+  /// Private resources require a future account; enforced server-side today by
+  /// simply not exposing them publicly.
+  visibility    MediaVisibility @default(PUBLIC)
+  featured      Boolean @default(false)
+  downloadCount Int     @default(0)
+  sortOrder     Int     @default(0)
+
+  createdById String?   @db.Uuid
+  updatedById String?   @db.Uuid
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  deletedById String?   @db.Uuid
+
+  file      MediaAsset? @relation("ResourceFile", fields: [fileId], references: [id], onDelete: SetNull)
+  thumbnail MediaAsset? @relation("ResourceThumbnail", fields: [thumbnailId], references: [id], onDelete: SetNull)
+  partner   Partner?    @relation(fields: [partnerId], references: [id], onDelete: SetNull)
+
+  translations ResourceTranslation[]
+  products     ProductOnResource[]
+  downloads    ResourceDownload[]
+
+  @@index([status, publishedAt])
+  @@index([type, status])
+  @@index([partnerId])
+  @@index([deletedAt])
+  @@map("resources")
+}
+
+model ResourceTranslation {
+  id         String  @id @default(uuid()) @db.Uuid
+  resourceId String  @db.Uuid
+  locale     String  @db.VarChar(16)
+  slug       String? @db.Citext
+
+  title       String
+  description String?
+
+  status     TranslationStatus @default(MISSING)
+  origin     TranslationOrigin @default(HUMAN)
+  sourceHash String?
+  approvedById String?         @db.Uuid
+  approvedAt DateTime?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  resource Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+
+  @@unique([resourceId, locale])
+  @@unique([locale, slug])
+  @@index([locale, status])
+  @@map("resource_translations")
+}
+
+model ProductOnResource {
+  productId  String @db.Uuid
+  resourceId String @db.Uuid
+
+  product  Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  resource Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+
+  @@id([productId, resourceId])
+  @@index([resourceId])
+  @@map("products_on_resources")
+}
+
+/// Download tracking (§18). Visitor identity is a salted hash, never raw IP —
+/// the analytics requirement is satisfied without retaining personal data.
+model ResourceDownload {
+  id          String   @id @default(uuid()) @db.Uuid
+  resourceId  String   @db.Uuid
+  locale      String?  @db.VarChar(16)
+  visitorHash String?
+  referrer    String?
+  countryCode String?  @db.VarChar(2)
+  createdAt   DateTime @default(now())
+
+  resource Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+
+  @@index([resourceId, createdAt])
+  @@index([createdAt])
+  @@map("resource_downloads")
+}
+
+// ============================================================================
+// TRUST CENTRE AND COMPANY PROFILE  (§9, §19, §41)
+// ============================================================================
+
+model Certificate {
+  id          String        @id @default(uuid()) @db.Uuid
+  slug        String        @unique @db.Citext
+  status      ContentStatus @default(DRAFT)
+  publishedAt DateTime?
+
+  /// e.g. "ISO", "CE", "LICENSE", "MEMBERSHIP", "POLICY". Editable list held
+  /// in site settings so new document classes need no migration.
+  kind        String   @default("CERTIFICATE")
+  issuer      String?
+  referenceNo String?
+  issuedOn    DateTime?
+  expiresOn   DateTime?
+
+  fileId      String? @db.Uuid
+  thumbnailId String? @db.Uuid
+  partnerId   String? @db.Uuid
+  productId   String? @db.Uuid
+  brandId     String? @db.Uuid
+
+  visibility MediaVisibility @default(PUBLIC)
+  featured   Boolean @default(false)
+  sortOrder  Int     @default(0)
+
+  createdById String?   @db.Uuid
+  updatedById String?   @db.Uuid
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  deletedById String?   @db.Uuid
+
+  file      MediaAsset? @relation("CertificateFile", fields: [fileId], references: [id], onDelete: SetNull)
+  thumbnail MediaAsset? @relation("CertificateThumbnail", fields: [thumbnailId], references: [id], onDelete: SetNull)
+  partner   Partner?    @relation(fields: [partnerId], references: [id], onDelete: SetNull)
+  product   Product?    @relation(fields: [productId], references: [id], onDelete: SetNull)
+  brand     Brand?      @relation(fields: [brandId], references: [id], onDelete: SetNull)
+
+  translations CertificateTranslation[]
+
+  @@index([status, sortOrder])
+  @@index([expiresOn])
+  @@index([deletedAt])
+  @@map("certificates")
+}
+
+model CertificateTranslation {
+  id            String  @id @default(uuid()) @db.Uuid
+  certificateId String  @db.Uuid
+  locale        String  @db.VarChar(16)
+  slug          String? @db.Citext
+
+  title       String
+  description String?
+  issuerLocalized String?
+
+  status     TranslationStatus @default(MISSING)
+  origin     TranslationOrigin @default(HUMAN)
+  sourceHash String?
+  approvedById String?         @db.Uuid
+  approvedAt DateTime?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  certificate Certificate @relation(fields: [certificateId], references: [id], onDelete: Cascade)
+
+  @@unique([certificateId, locale])
+  @@unique([locale, slug])
+  @@index([locale, status])
+  @@map("certificate_translations")
+}
+
+model Office {
+  id          String   @id @default(uuid()) @db.Uuid
+  key         String   @unique
+  countryCode String   @db.VarChar(2)
+  city        String
+  latitude    Float?
+  longitude   Float?
+  phone       String?
+  phoneSecondary String?
+  email       String?
+  imageId     String?  @db.Uuid
+  isHeadquarters Boolean @default(false)
+  visible     Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  /// Structured hours: [{ "days": [1,2,3,4,5], "open": "09:00", "close": "18:00" }]
+  workingHours Json?
+  mapEmbedUrl String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  image        MediaAsset?         @relation("OfficeImage", fields: [imageId], references: [id], onDelete: SetNull)
+  translations OfficeTranslation[]
+
+  @@index([visible, sortOrder])
+  @@map("offices")
+}
+
+model OfficeTranslation {
+  id       String @id @default(uuid()) @db.Uuid
+  officeId String @db.Uuid
+  locale   String @db.VarChar(16)
+
+  name          String
+  addressLine   String?
+  cityLocalized String?
+  contactPerson String?
+  note          String?
+
+  status     TranslationStatus @default(MISSING)
+  origin     TranslationOrigin @default(HUMAN)
+  sourceHash String?
+  approvedById String?         @db.Uuid
+  approvedAt DateTime?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  office Office @relation(fields: [officeId], references: [id], onDelete: Cascade)
+
+  @@unique([officeId, locale])
+  @@index([locale, status])
+  @@map("office_translations")
+}
+
+model TeamMember {
+  id        String   @id @default(uuid()) @db.Uuid
+  slug      String   @unique @db.Citext
+  photoId   String?  @db.Uuid
+  email     String?
+  phone     String?
+  /// ISO codes of languages this person works in — useful for partner contact.
+  languages String[]
+  visible   Boolean  @default(true)
+  sortOrder Int      @default(0)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  photo        MediaAsset?             @relation("TeamMemberPhoto", fields: [photoId], references: [id], onDelete: SetNull)
+  translations TeamMemberTranslation[]
+  socialLinks  SocialLink[]
+
+  @@index([visible, sortOrder])
+  @@map("team_members")
+}
+
+model TeamMemberTranslation {
+  id       String @id @default(uuid()) @db.Uuid
+  memberId String @db.Uuid
+  locale   String @db.VarChar(16)
+
+  name     String
+  position String?
+  bio      Json?
+
+  status     TranslationStatus @default(MISSING)
+  origin     TranslationOrigin @default(HUMAN)
+  sourceHash String?
+  approvedById String?         @db.Uuid
+  approvedAt DateTime?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  member TeamMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@unique([memberId, locale])
+  @@index([locale, status])
+  @@map("team_member_translations")
+}
+
+model Milestone {
+  id        String   @id @default(uuid()) @db.Uuid
+  year      Int
+  month     Int?
+  imageId   String?  @db.Uuid
+  visible   Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deletedAt DateTime?
+
+  image        MediaAsset?            @relation("MilestoneImage", fields: [imageId], references: [id], onDelete: SetNull)
+  translations MilestoneTranslation[]
+
+  @@index([year, sortOrder])
+  @@map("milestones")
+}
+
+model MilestoneTranslation {
+  id          String @id @default(uuid()) @db.Uuid
+  milestoneId String @db.Uuid
+  locale      String @db.VarChar(16)
+  title       String
+  description String?
+
+  status     TranslationStatus @default(MISSING)
+  origin     TranslationOrigin @default(HUMAN)
+  sourceHash String?
+  approvedById String?         @db.Uuid
+  approvedAt DateTime?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  milestone Milestone @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
+
+  @@unique([milestoneId, locale])
+  @@index([locale, status])
+  @@map("milestone_translations")
+}
+
+model Testimonial {
+  id        String        @id @default(uuid()) @db.Uuid
+  status    ContentStatus @default(DRAFT)
+  authorName String
+  avatarId  String?  @db.Uuid
+  logoId    String?  @db.Uuid
+  partnerId String?  @db.Uuid
+  rating    Int?
+  /// Set only when the company holds documented permission to publish it.
+  consentOnFile Boolean @default(false)
+  featured  Boolean  @default(false)
+  sortOrder Int      @default(0)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  avatar  MediaAsset? @relation("TestimonialAvatar", fields: [avatarId], references: [id], onDelete: SetNull)
+  logo    MediaAsset? @relation("TestimonialLogo", fields: [logoId], references: [id], onDelete: SetNull)
+  partner Partner?    @relation(fields: [partnerId], references: [id], onDelete: SetNull)
+
+  translations TestimonialTranslation[]
+
+  @@index([status, featured, sortOrder])
+  @@map("testimonials")
+}
+
+model TestimonialTranslation {
+  id            String @id @default(uuid()) @db.Uuid
+  testimonialId String @db.Uuid
+  locale        String @db.VarChar(16)
+  quote         String
+  authorTitle   String?
+  organization  String?
+
+  status     TranslationStatus @default(MISSING)
+  origin     TranslationOrigin @default(HUMAN)
+  sourceHash String?
+  approvedById String?         @db.Uuid
+  approvedAt DateTime?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  testimonial Testimonial @relation(fields: [testimonialId], references: [id], onDelete: Cascade)
+
+  @@unique([testimonialId, locale])
+  @@index([locale, status])
+  @@map("testimonial_translations")
+}
+
+model Faq {
+  id        String        @id @default(uuid()) @db.Uuid
+  slug      String        @unique @db.Citext
+  status    ContentStatus @default(DRAFT)
+  categoryKey String?
+  serviceId String?  @db.Uuid
+  sortOrder Int      @default(0)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  service      Service?         @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  translations FaqTranslation[]
+
+  @@index([status, sortOrder])
+  @@index([serviceId])
+  @@map("faqs")
+}
+
+model FaqTranslation {
+  id     String @id @default(uuid()) @db.Uuid
+  faqId  String @db.Uuid
+  locale String @db.VarChar(16)
+  question String
+  answer   Json?
+
+  status     TranslationStatus @default(MISSING)
+  origin     TranslationOrigin @default(HUMAN)
+  sourceHash String?
+  approvedById String?         @db.Uuid
+  approvedAt DateTime?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  faq Faq @relation(fields: [faqId], references: [id], onDelete: Cascade)
+
+  @@unique([faqId, locale])
+  @@index([locale, status])
+  @@map("faq_translations")
+}
+
+/// Social links are rows, never constants (§42, §79).
+model SocialLink {
+  id        String   @id @default(uuid()) @db.Uuid
+  /// "instagram" | "linkedin" | "facebook" | "youtube" | "telegram"
+  /// | "whatsapp" | "x" | custom
+  platform  String
+  url       String
+  label     String?
+  iconKey   String?
+  sortOrder Int      @default(0)
+  visible   Boolean  @default(true)
+
+  /// A link belongs to the company (all null), or to a partner, brand or
+  /// team member.
+  partnerId    String? @db.Uuid
+  brandId      String? @db.Uuid
+  teamMemberId String? @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  partner    Partner?    @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  brand      Brand?      @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  teamMember TeamMember? @relation(fields: [teamMemberId], references: [id], onDelete: Cascade)
+
+  @@index([partnerId])
+  @@index([brandId])
+  @@index([teamMemberId])
+  @@index([visible, sortOrder])
+  @@map("social_links")
+}
+
+// ============================================================================
+// FORMS, SUBMISSIONS AND LEADS  (§20, §21)
+// ============================================================================
+
+model Form {
+  id        String   @id @default(uuid()) @db.Uuid
+  key       String   @unique
+  name      String
+  enabled   Boolean  @default(true)
+  isSystem  Boolean  @default(false)
+  inquiryType InquiryType @default(GENERAL)
+  /// Where notifications for this form go. Empty falls back to site settings.
+  notifyEmails String[]
+  /// Optional redirect after submission; otherwise an inline success message.
+  successRedirect String?
+  /// Anti-spam: minimum seconds between render and submit.
+  minFillSeconds Int @default(3)
+  requireCaptcha Boolean @default(false)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  fields      FormField[]
+  submissions FormSubmission[]
+
+  @@map("forms")
+}
+
+model FormField {
+  id        String        @id @default(uuid()) @db.Uuid
+  formId    String        @db.Uuid
+  key       String
+  type      FormFieldType @default(TEXT)
+  required  Boolean       @default(false)
+  sortOrder Int           @default(0)
+  enabled   Boolean       @default(true)
+  /// Validation rules interpreted by a shared Zod builder on both sides:
+  /// { "minLength": 2, "maxLength": 500, "pattern": "...", "accept": [".pdf"] }
+  validation Json?
+  /// Choice values for SELECT/RADIO/CHECKBOX; labels are per-locale below.
+  options    Json?
+  width      String        @default("full")
+
+  form         Form                    @relation(fields: [formId], references: [id], onDelete: Cascade)
+  translations FormFieldTranslation[]
+
+  @@unique([formId, key])
+  @@index([formId, sortOrder])
+  @@map("form_fields")
+}
+
+model FormFieldTranslation {
+  id      String @id @default(uuid()) @db.Uuid
+  fieldId String @db.Uuid
+  locale  String @db.VarChar(16)
+
+  label       String
+  placeholder String?
+  helpText    String?
+  /// Localized option labels keyed by option value.
+  optionLabels Json?
+  /// Localized validation messages keyed by rule name.
+  errorMessages Json?
+
+  status     TranslationStatus @default(MISSING)
+  origin     TranslationOrigin @default(HUMAN)
+  sourceHash String?
+  approvedById String?         @db.Uuid
+  approvedAt DateTime?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  field FormField @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+
+  @@unique([fieldId, locale])
+  @@index([locale, status])
+  @@map("form_field_translations")
+}
+
+/// The raw submission, kept exactly as received for audit purposes. The
+/// business-facing record is `Inquiry`, created from it in the same
+/// transaction.
+model FormSubmission {
+  id       String   @id @default(uuid()) @db.Uuid
+  formId   String   @db.Uuid
+  /// Field key → submitted value.
+  payload  Json
+  locale   String?  @db.VarChar(16)
+  sourcePath String?
+  referrer String?
+  /// Salted hash, not the raw address (§47 data minimisation).
+  ipHash   String?
+  userAgent String?
+  countryCode String? @db.VarChar(2)
+  spamScore Float?
+  createdAt DateTime @default(now())
+
+  form    Form                 @relation(fields: [formId], references: [id], onDelete: Cascade)
+  files   FormSubmissionFile[]
+  inquiry Inquiry?
+
+  @@index([formId, createdAt])
+  @@index([createdAt])
+  @@map("form_submissions")
+}
+
+model FormSubmissionFile {
+  id           String   @id @default(uuid()) @db.Uuid
+  submissionId String   @db.Uuid
+  assetId      String   @db.Uuid
+  fieldKey     String
+  createdAt    DateTime @default(now())
+
+  submission FormSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  asset      MediaAsset     @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@index([submissionId])
+  @@map("form_submission_files")
+}
+
+/// The working record for the sales team. Every public form submission
+/// produces exactly one of these (§20).
+model Inquiry {
+  id     String        @id @default(uuid()) @db.Uuid
+  type   InquiryType   @default(GENERAL)
+  status InquiryStatus @default(NEW)
+  reference String     @unique
+
+  name        String
+  company     String?
+  email       String
+  phone       String?
+  countryCode String? @db.VarChar(2)
+  message     String
+
+  locale       String? @db.VarChar(16)
+  sourcePath   String?
+  submissionId String? @unique @db.Uuid
+
+  productId String? @db.Uuid
+  partnerId String? @db.Uuid
+  serviceId String? @db.Uuid
+
+  assignedToId String?   @db.Uuid
+  respondedAt  DateTime?
+  resolvedAt   DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  submission FormSubmission? @relation(fields: [submissionId], references: [id], onDelete: SetNull)
+  product    Product?        @relation(fields: [productId], references: [id], onDelete: SetNull)
+  partner    Partner?        @relation(fields: [partnerId], references: [id], onDelete: SetNull)
+  service    Service?        @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  assignedTo User?           @relation("InquiryAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  notes      InquiryNote[]
+
+  @@index([status, createdAt])
+  @@index([type, status])
+  @@index([email])
+  @@index([createdAt])
+  @@map("inquiries")
+}
+
+model InquiryNote {
+  id        String   @id @default(uuid()) @db.Uuid
+  inquiryId String   @db.Uuid
+  authorId  String?  @db.Uuid
+  body      String
+  createdAt DateTime @default(now())
+
+  inquiry Inquiry @relation(fields: [inquiryId], references: [id], onDelete: Cascade)
+  author  User?   @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([inquiryId, createdAt])
+  @@map("inquiry_notes")
+}
+
+model NewsletterSubscriber {
+  id        String    @id @default(uuid()) @db.Uuid
+  email     String    @unique @db.Citext
+  locale    String?   @db.VarChar(16)
+  name      String?
+  /// Double opt-in: a subscriber is only active once `confirmedAt` is set.
+  confirmTokenHash String? @unique
+  confirmedAt      DateTime?
+  unsubscribedAt   DateTime?
+  unsubscribeTokenHash String? @unique
+  source    String?
+  consentText String?
+  ipHash    String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([confirmedAt, unsubscribedAt])
+  @@map("newsletter_subscribers")
+}
+
+// ============================================================================
+// AI  (§23–§30)
+// ============================================================================
+
+/// One indexed source document per publishable entity, per locale.
+model KnowledgeDocument {
+  id         String     @id @default(uuid()) @db.Uuid
+  entityType EntityType
+  entityId   String
+  locale     String     @db.VarChar(16)
+
+  title      String
+  sourceUrl  String?
+  /// Hash of the normalized source text. Unchanged content is never re-embedded.
+  contentHash String
+  tokenCount Int        @default(0)
+  /// Mirrors the entity's publication state. Only PUBLISHED documents are
+  /// retrievable by the public assistant (§7.2).
+  isPublic   Boolean    @default(false)
+  indexedAt  DateTime?
+  error      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  chunks KnowledgeChunk[]
+
+  @@unique([entityType, entityId, locale])
+  @@index([locale, isPublic])
+  @@index([contentHash])
+  @@map("knowledge_documents")
+}
+
+model KnowledgeChunk {
+  id         String @id @default(uuid()) @db.Uuid
+  documentId String @db.Uuid
+  chunkIndex Int
+  content    String
+  tokenCount Int    @default(0)
+  /// Section heading or spec-group this chunk came from — used to build an
+  /// accurate citation label.
+  sectionLabel String?
+  /// pgvector column. Dimension matches AI_EMBED_DIMENSIONS.
+  embedding  Unsupported("vector(1536)")?
+  embeddingModel String?
+  contentHash String
+
+  createdAt DateTime @default(now())
+
+  document KnowledgeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, chunkIndex])
+  @@index([contentHash])
+  @@map("knowledge_chunks")
+}
+
+model AIConversation {
+  id        String      @id @default(uuid()) @db.Uuid
+  actorKind AIActorKind @default(PUBLIC_VISITOR)
+  userId    String?     @db.Uuid
+  /// Anonymous visitor identifier (salted hash of a first-party cookie value).
+  visitorHash String?
+  locale    String?     @db.VarChar(16)
+  title     String?
+  /// PUBLIC_ASSISTANT | ADMIN_ASSISTANT — determines which tools and which
+  /// knowledge scope apply.
+  surface   String      @default("PUBLIC_ASSISTANT")
+  messageCount Int      @default(0)
+  lastMessageAt DateTime?
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  user     User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  messages AIMessage[]
+
+  @@index([surface, createdAt])
+  @@index([userId, createdAt])
+  @@map("ai_conversations")
+}
+
+model AIMessage {
+  id             String        @id @default(uuid()) @db.Uuid
+  conversationId String        @db.Uuid
+  role           AIMessageRole
+  content        String
+  /// Tool invocations and their results, when role = TOOL.
+  toolCalls      Json?
+  /// Resolved citations: [{ chunkId, entityType, entityId, url, label }]
+  citations      Json?
+  /// Structured cards returned alongside the prose.
+  cards          Json?
+  /// Set when the answer was withheld for lack of grounding or by a safety
+  /// rule — makes refusal behaviour measurable rather than anecdotal.
+  refusalReason  String?
+  inputTokens    Int?
+  outputTokens   Int?
+  latencyMs      Int?
+  createdAt      DateTime      @default(now())
+
+  conversation AIConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@map("ai_messages")
+}
+
+/// One row per provider call. This is the source of truth for §29 cost control.
+model AIUsage {
+  id         String     @id @default(uuid()) @db.Uuid
+  taskType   AITaskType
+  provider   AIProvider
+  model      String
+  surface    String?
+  userId     String?    @db.Uuid
+  entityType EntityType?
+  entityId   String?
+  locale     String?    @db.VarChar(16)
+
+  inputTokens  Int     @default(0)
+  outputTokens Int     @default(0)
+  /// Estimated cost in USD micro-units (1e-6) to avoid float drift.
+  costMicros   Int     @default(0)
+  latencyMs    Int?
+  cached       Boolean @default(false)
+  success      Boolean @default(true)
+  errorCode    String?
+
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([taskType, createdAt])
+  @@index([userId, createdAt])
+  @@map("ai_usage")
+}
+
+/// A bulk AI operation (§28). Items carry per-record status so a partial
+/// failure is visible and retryable rather than silently lost.
+model AIJob {
+  id        String      @id @default(uuid()) @db.Uuid
+  taskType  AITaskType
+  status    AIJobStatus @default(QUEUED)
+  createdById String?   @db.Uuid
+  /// Job parameters: { entityType, ids[], locales[], overwrite }
+  params    Json
+  totalItems     Int @default(0)
+  completedItems Int @default(0)
+  failedItems    Int @default(0)
+  costMicros     Int @default(0)
+  error     String?
+  startedAt DateTime?
+  finishedAt DateTime?
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  createdBy User?       @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  items     AIJobItem[]
+
+  @@index([status, createdAt])
+  @@index([createdById, createdAt])
+  @@map("ai_jobs")
+}
+
+model AIJobItem {
+  id         String      @id @default(uuid()) @db.Uuid
+  jobId      String      @db.Uuid
+  entityType EntityType
+  entityId   String
+  locale     String?     @db.VarChar(16)
+  status     AIJobStatus @default(QUEUED)
+  attempts   Int         @default(0)
+  error      String?
+  /// The produced draft, retained so a reviewer can inspect it even if the
+  /// write step later failed.
+  result     Json?
+  startedAt  DateTime?
+  finishedAt DateTime?
+
+  job AIJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, status])
+  @@index([entityType, entityId])
+  @@map("ai_job_items")
+}
+
+/// Prompts are data so they can be tuned without a deploy — but they are
+/// Super-Admin-only and every change is audited.
+model AIPromptTemplate {
+  id        String     @id @default(uuid()) @db.Uuid
+  key       String     @unique
+  taskType  AITaskType
+  name      String
+  template  String
+  variables String[]
+  version   Int        @default(1)
+  enabled   Boolean    @default(true)
+  updatedById String?  @db.Uuid
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  @@map("ai_prompt_templates")
+}
+
+// ============================================================================
+// ANALYTICS  (§37) — privacy-aware by construction
+//
+// No raw IP addresses and no cross-site identifiers are stored. A visitor is a
+// daily-rotating salted hash, which is enough to count sessions without being
+// able to re-identify a person.
+// ============================================================================
+
+model PageView {
+  id          String   @id @default(uuid()) @db.Uuid
+  path        String
+  locale      String?  @db.VarChar(16)
+  visitorHash String?
+  sessionHash String?
+  referrerHost String?
+  countryCode String?  @db.VarChar(2)
+  deviceType  String?
+  /// Set when the path maps to a known entity, so entity-level popularity is
+  /// queryable without parsing URLs.
+  entityType  EntityType?
+  entityId    String?
+  durationMs  Int?
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([path, createdAt])
+  @@index([entityType, entityId, createdAt])
+  @@map("page_views")
+}
+
+model EntityView {
+  id         String     @id @default(uuid()) @db.Uuid
+  entityType EntityType
+  entityId   String
+  locale     String?    @db.VarChar(16)
+  visitorHash String?
+  createdAt  DateTime   @default(now())
+
+  @@index([entityType, entityId, createdAt])
+  @@index([createdAt])
+  @@map("entity_views")
+}
+
+model SearchQueryLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  query       String
+  normalized  String
+  locale      String?  @db.VarChar(16)
+  resultCount Int      @default(0)
+  /// Which result, if any, the visitor clicked — the signal for relevance tuning.
+  clickedEntityType EntityType?
+  clickedEntityId   String?
+  visitorHash String?
+  createdAt   DateTime @default(now())
+
+  @@index([normalized, createdAt])
+  @@index([resultCount, createdAt])
+  @@index([createdAt])
+  @@map("search_query_logs")
+}
+
+model CtaClick {
+  id         String     @id @default(uuid()) @db.Uuid
+  ctaKey     String
+  path       String?
+  locale     String?    @db.VarChar(16)
+  entityType EntityType?
+  entityId   String?
+  visitorHash String?
+  createdAt  DateTime   @default(now())
+
+  @@index([ctaKey, createdAt])
+  @@index([createdAt])
+  @@map("cta_clicks")
+}
+
+model DownloadEvent {
+  id          String     @id @default(uuid()) @db.Uuid
+  assetId     String?    @db.Uuid
+  entityType  EntityType?
+  entityId    String?
+  locale      String?    @db.VarChar(16)
+  visitorHash String?
+  createdAt   DateTime   @default(now())
+
+  @@index([entityType, entityId, createdAt])
+  @@index([createdAt])
+  @@map("download_events")
+}
+
+/// Nightly rollup so dashboards never scan raw event tables.
+model AnalyticsDaily {
+  id         String     @id @default(uuid()) @db.Uuid
+  date       DateTime   @db.Date
+  metric     String
+  dimension  String?
+  locale     String?    @db.VarChar(16)
+  entityType EntityType?
+  entityId   String?
+  value      Int        @default(0)
+
+  @@unique([date, metric, dimension, locale, entityType, entityId])
+  @@index([metric, date])
+  @@map("analytics_daily")
+}
+
+// ============================================================================
+// SYSTEM
+// ============================================================================
+
+/// Namespaced key/value configuration. Business content lives here rather than
+/// in code (§79): company statistics, contact details, homepage section order,
+/// maintenance mode, cookie categories, AI routing, security policy.
+model SiteSetting {
+  id          String   @id @default(uuid()) @db.Uuid
+  namespace   String
+  key         String
+  value       Json
+  /// Localized variants keyed by locale, for settings that are user-visible text.
+  localized   Json?
+  /// Marks settings that must never be exposed to a public endpoint.
+  isSensitive Boolean  @default(false)
+  description String?
+  updatedById String?  @db.Uuid
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([namespace, key])
+  @@index([namespace])
+  @@map("site_settings")
+}
+
+model Banner {
+  id        String        @id @default(uuid()) @db.Uuid
+  key       String        @unique
+  status    ContentStatus @default(DRAFT)
+  placement String        @default("home_hero")
+
+  imageId       String? @db.Uuid
+  mobileImageId String? @db.Uuid
+
+  linkTarget   MenuItemTarget @default(NONE)
+  linkUrl      String?
+  linkEntityId String?
+  openInNewTab Boolean        @default(false)
+
+  startsAt DateTime?
+  endsAt   DateTime?
+  /// Empty = all locales. Otherwise restricted to the listed locales.
+  locales  String[]
+  /// "all" | "desktop" | "mobile"
+  devices  String   @default("all")
+  sortOrder Int     @default(0)
+  dismissible Boolean @default(false)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  image       MediaAsset? @relation("BannerImage", fields: [imageId], references: [id], onDelete: SetNull)
+  mobileImage MediaAsset? @relation("BannerMobileImage", fields: [mobileImageId], references: [id], onDelete: SetNull)
+
+  translations BannerTranslation[]
+
+  @@index([placement, status, sortOrder])
+  @@map("banners")
+}
+
+model BannerTranslation {
+  id       String @id @default(uuid()) @db.Uuid
+  bannerId String @db.Uuid
+  locale   String @db.VarChar(16)
+  title    String?
+  subtitle String?
+  body     String?
+  ctaLabel String?
+
+  status     TranslationStatus @default(MISSING)
+  origin     TranslationOrigin @default(HUMAN)
+  sourceHash String?
+  approvedById String?         @db.Uuid
+  approvedAt DateTime?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  banner Banner @relation(fields: [bannerId], references: [id], onDelete: Cascade)
+
+  @@unique([bannerId, locale])
+  @@index([locale, status])
+  @@map("banner_translations")
+}
+
+/// Cookie consent records (§46, §47). Keyed by a first-party identifier hash;
+/// retained as evidence of consent, containing no directly identifying data.
+model CookieConsent {
+  id          String   @id @default(uuid()) @db.Uuid
+  visitorHash String
+  /// Granted categories.
+  categories  ConsentCategory[]
+  policyVersion String
+  locale      String?  @db.VarChar(16)
+  countryCode String?  @db.VarChar(2)
+  userAgentHash String?
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime?
+
+  @@index([visitorHash, createdAt])
+  @@index([createdAt])
+  @@map("cookie_consents")
+}
+
+/// Execution record for every background job (§62). Gives the admin a real
+/// job history rather than an opaque queue.
+model JobRun {
+  id         String    @id @default(uuid()) @db.Uuid
+  queue      String
+  jobName    String
+  jobId      String?
+  status     JobStatus @default(QUEUED)
+  attempts   Int       @default(0)
+  payload    Json?
+  result     Json?
+  error      String?
+  startedAt  DateTime?
+  finishedAt DateTime?
+  durationMs Int?
+  createdAt  DateTime  @default(now())
+
+  @@index([queue, status, createdAt])
+  @@index([createdAt])
+  @@map("job_runs")
+}
+
+model Notification {
+  id        String           @id @default(uuid()) @db.Uuid
+  kind      NotificationKind
+  userId    String?          @db.Uuid
+  title     String
+  body      String?
+  /// Deep link into the admin panel.
+  link      String?
+  severity  String           @default("info")
+  metadata  Json?
+  readAt    DateTime?
+  emailSentAt DateTime?
+  createdAt DateTime         @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+  @@index([kind, createdAt])
+  @@map("notifications")
+}
