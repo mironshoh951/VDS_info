@@ -175,6 +175,12 @@ export const ADMIN_NAV: NavSection[] = [
         icon: 'Lock',
       },
       {
+        href: '/admin/transfer',
+        key: 'transfer',
+        capability: 'export.run',
+        icon: 'ArrowLeftRight',
+      },
+      {
         href: '/admin/trash',
         key: 'trash',
         capability: 'content.read',

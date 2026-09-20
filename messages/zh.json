@@ -34,7 +34,8 @@
     "news": "新闻",
     "resources": "资料中心",
     "certificates": "信任中心",
-    "contact": "联系方式"
+    "contact": "联系方式",
+    "assistant": "助手"
   },
   "errors": {
     "title": "出现错误",
@@ -297,7 +298,8 @@
       "settings": "设置",
       "users": "用户",
       "security": "安全",
-      "trash": "回收站"
+      "trash": "回收站",
+      "transfer": "导入与导出"
     },
     "media": {
       "title": "媒体",
@@ -634,6 +636,54 @@
       "skipped": "无法翻译：{languages}",
       "reviewHint": "批准前请通读——这是起点，而非定稿。",
       "failed": "翻译失败。"
+    },
+    "transfer": {
+      "contentType": "内容类型",
+      "format": "格式",
+      "formatCsv": "CSV（表格）",
+      "formatJson": "JSON",
+      "exportTitle": "导出",
+      "exportDescription": "将全部 {count} 条记录连同四种语言下载为一个文件。可在表格软件中编辑后重新导入。",
+      "exportButton": "下载导出文件",
+      "templateButton": "空白模板",
+      "templateReady": "模板已下载。每条记录填写一行后导入即可。",
+      "exportReady": "已下载 {count} 条记录，文件名 {file}。",
+      "importTitle": "导入",
+      "importDescription": "文件中缺少的列保持原样。带 id 或已知 slug 的行会更新该记录，其余行创建为草稿。导入不会更改发布状态。",
+      "chooseFile": "请先选择文件。",
+      "previewButton": "预览变更",
+      "applyButton": "执行导入",
+      "selectedFile": "已选择：{name}",
+      "imported": "导入完成 — 共 {count} 行。",
+      "previewTitle": "预览 — 尚未写入任何内容",
+      "resultTitle": "导入结果",
+      "summary": "共 {total} 行 · 新建 {created} · 更新 {updated} · 有问题 {failed}",
+      "columnLine": "行",
+      "columnAction": "操作",
+      "columnRecord": "记录",
+      "columnNote": "说明",
+      "action": {
+        "create": "新建",
+        "update": "更新",
+        "error": "问题"
+      },
+      "failed": "出了点问题。"
     }
+  },
+  "assistant": {
+    "title": "产品目录助手",
+    "intro": "可询问产品、品牌、服务或活动。答案取自本目录，并附上来源页面链接。",
+    "empty": "提出问题即可开始 — 例如有哪些复合材料，或代理哪些品牌。",
+    "thinking": "正在检索目录…",
+    "placeholder": "询问产品、品牌或服务…",
+    "inputLabel": "您的问题",
+    "send": "发送",
+    "sources": "来源页面",
+    "failed": "助手暂时不可用。",
+    "noMatch": "目录中没有找到相关内容。<link>直接联系团队</link>，会有同事回复您。",
+    "disclaimer": "答案由目录文本生成，可能不完整或已过时。价格、库存、交付及任何临床问题请<link>联系团队</link>。",
+    "suggestion1": "你们有哪些复合材料？",
+    "suggestion2": "你们代理哪些品牌？",
+    "suggestion3": "设备方面提供哪些服务？"
   }
 }

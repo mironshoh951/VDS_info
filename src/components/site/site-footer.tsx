@@ -1,4 +1,6 @@
 import Link from 'next/link'
+import { getTranslations } from 'next-intl/server'
+import { Sparkles } from 'lucide-react'
 import { getNavigation } from '@/server/modules/navigation/service'
 import { getSettings } from '@/server/modules/settings/service'
 import { db } from '@/server/db/client'
@@ -18,20 +20,23 @@ export async function SiteFooter({
   locale: Locale
   defaultLocale: Locale
 }) {
-  const [primary, secondary, legal, general, contact, socialLinks] = await Promise.all([
-    getNavigation('FOOTER_PRIMARY', locale, defaultLocale),
-    getNavigation('FOOTER_SECONDARY', locale, defaultLocale),
-    getNavigation('FOOTER_LEGAL', locale, defaultLocale),
-    getSettings('site.general', locale),
-    getSettings('site.contact', locale),
-    db.socialLink
-      .findMany({
-        where: { visible: true, partnerId: null, brandId: null, teamMemberId: null },
-        orderBy: { sortOrder: 'asc' },
-        select: { id: true, platform: true, url: true, label: true },
-      })
-      .catch(() => []),
-  ])
+  const [primary, secondary, legal, general, contact, routing, t, socialLinks] =
+    await Promise.all([
+      getNavigation('FOOTER_PRIMARY', locale, defaultLocale),
+      getNavigation('FOOTER_SECONDARY', locale, defaultLocale),
+      getNavigation('FOOTER_LEGAL', locale, defaultLocale),
+      getSettings('site.general', locale),
+      getSettings('site.contact', locale),
+      getSettings('ai.routing'),
+      getTranslations({ locale, namespace: 'nav' }),
+      db.socialLink
+        .findMany({
+          where: { visible: true, partnerId: null, brandId: null, teamMemberId: null },
+          orderBy: { sortOrder: 'asc' },
+          select: { id: true, platform: true, url: true, label: true },
+        })
+        .catch(() => []),
+    ])
 
   const year = new Date().getFullYear()
   const owner = general.legalName || general.siteName
@@ -50,6 +55,21 @@ export async function SiteFooter({
               <p className="max-w-xs text-sm leading-relaxed text-neutral-600">
                 {general.tagline}
               </p>
+            )}
+            {/*
+              The assistant is linked only where it exists. Its page 404s when
+              the setting is off, so a link that ignored the setting would be a
+              dead one — and the footer is the last place a visitor should meet
+              a broken promise.
+            */}
+            {routing.publicAssistantEnabled === true && (
+              <Link
+                href={`/${locale}/assistant`}
+                className="text-primary-700 hover:text-primary-900 inline-flex items-center gap-1.5 text-sm"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                {t('assistant')}
+              </Link>
             )}
           </div>
 

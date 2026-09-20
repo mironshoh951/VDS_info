@@ -91,3 +91,49 @@ test.describe('admin panel', () => {
     expect(await saves.count()).toBeLessThanOrEqual(2)
   })
 })
+
+test.describe('import and export', () => {
+  test('the screen is closed to anonymous visitors', async ({ page }) => {
+    await page.goto('/admin/transfer')
+    await expect(page).toHaveURL(/\/admin\/login/)
+  })
+})
+
+test.describe('import and export, signed in', () => {
+  test.skip(!authenticated, 'Set E2E_ADMIN_EMAIL and E2E_ADMIN_PASSWORD to run these')
+
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/admin/login')
+    await page.fill('input[name="email"]', email!)
+    await page.fill('input[name="password"]', password!)
+    await page.click('button[type="submit"]')
+    await expect(page).not.toHaveURL(/\/admin\/login/)
+  })
+
+  test('an export downloads a file named after the content type', async ({ page }) => {
+    await page.goto('/admin/transfer')
+    await expect(page.locator('main')).toBeVisible()
+
+    const download = page.waitForEvent('download')
+    await page
+      .getByRole('button', {
+        name: /download export|eksportni|скачать экспорт|下载导出/i,
+      })
+      .click()
+
+    const file = await download
+    expect(file.suggestedFilename()).toMatch(/\.(csv|json)$/)
+  })
+
+  test('importing asks for a preview before it will apply anything', async ({ page }) => {
+    await page.goto('/admin/transfer')
+
+    // Apply is inert until a preview has run: a bulk write must never be one
+    // stray click away.
+    const apply = page.getByRole('button', {
+      name: /apply import|importni|применить импорт|执行导入/i,
+    })
+    if ((await apply.count()) === 0) test.skip(true, 'This account cannot import')
+    await expect(apply).toBeDisabled()
+  })
+})

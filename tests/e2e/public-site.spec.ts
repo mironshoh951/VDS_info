@@ -107,3 +107,42 @@ test.describe('theme', () => {
     }
   })
 })
+
+test.describe('catalogue assistant', () => {
+  /**
+   * The assistant is a setting, so the suite cannot assume it is on. What it
+   * can assume is that the site agrees with itself: the footer offers the page
+   * exactly when the page exists. A link to a 404 is the failure this catches,
+   * and it catches it whichever way the setting is set.
+   */
+  test('the footer offers the assistant exactly when the page exists', async ({
+    page,
+  }) => {
+    await page.goto('/uz')
+    const linked = (await page.locator('footer a[href="/uz/assistant"]').count()) > 0
+
+    const response = await page.goto('/uz/assistant')
+
+    if (linked) {
+      expect(response?.status()).toBe(200)
+      await expect(page.locator('textarea')).toBeVisible()
+    } else {
+      expect(response?.status()).toBe(404)
+    }
+  })
+
+  test('a question joins the transcript without leaving the page', async ({ page }) => {
+    const response = await page.goto('/uz/assistant')
+    if (response?.status() !== 200) test.skip(true, 'The assistant is turned off')
+
+    const question = 'Qanday kompozitlar bor?'
+    await page.locator('textarea').fill(question)
+    await page.locator('form button[type="submit"]').click()
+
+    // The visitor's own turn is shown immediately, whatever the provider does
+    // next — that is what makes the page feel answerable rather than broken
+    // when the model is slow or unconfigured.
+    await expect(page.getByText(question)).toBeVisible()
+    await expect(page).toHaveURL(/\/uz\/assistant$/)
+  })
+})

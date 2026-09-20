@@ -102,6 +102,11 @@ all database-driven.
   block, and a photo-gallery block with a mosaic or even-row layout. Both render
   nothing until pictures are chosen — an empty frame captioned "our facilities"
   is worse than no section
+- A catalogue assistant, off until enabled in Settings → AI. It answers only
+  from passages the site's own search returned, links every page it drew on,
+  and says it does not know rather than inventing a product, a price or a
+  certification. Rate limited per address and per day, and priced into the same
+  ledger as every other AI call.
 - Light and dark themes with a header toggle. First visit follows the
   visitor's operating system; their choice is remembered in a cookie and
   applied by a pre-paint inline script, so there is no flash and the pages stay
@@ -143,16 +148,21 @@ all database-driven.
 - AI translation: drafts the other three languages from the Uzbek source,
   marked `AI_DRAFT` so nothing reaches the public site before a person approves
   it. Every call is priced into a spend ledger with a monthly cap.
+- Import and export: any content type leaves as a CSV (all four languages, one
+  row per record) or JSON, and comes back through the same `saveRecord` the
+  editor uses — so a spreadsheet obeys the editor's rules about slugs, source
+  titles and outdated translations. A column the file omits is left alone
+  rather than cleared, an import never changes publication status, and nothing
+  is written until a dry run has reported what would change, row by row.
 
 ---
 
 ## Not built yet
 
-| Area             | Notes                                                                                                                                         |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| Public assistant | The retrieval-augmented chat on the site itself. Needs either an embedding provider or the search-backed fallback wired to the chat surface.  |
-| Import/export    | Not started.                                                                                                                                  |
-| E2E tests        | Smoke suites cover the public site, theming and admin sign-in. The authenticated admin tests need `E2E_ADMIN_EMAIL` and `E2E_ADMIN_PASSWORD`. |
+| Area       | Notes                                                                                                                                                                   |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Embeddings | The assistant retrieves through Postgres search. A vector index would improve recall on paraphrased questions; it needs an embedding provider, and Groq publishes none. |
+| E2E depth  | The suites are smoke tests. The authenticated admin tests need `E2E_ADMIN_EMAIL` and `E2E_ADMIN_PASSWORD`; without them they skip rather than fail.                     |
 
 ---
 

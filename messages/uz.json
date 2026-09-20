@@ -34,7 +34,8 @@
     "news": "Yangiliklar",
     "resources": "Materiallar",
     "certificates": "Ishonch markazi",
-    "contact": "Aloqa"
+    "contact": "Aloqa",
+    "assistant": "Yordamchi"
   },
   "errors": {
     "title": "Xatolik yuz berdi",
@@ -297,7 +298,8 @@
       "settings": "Sozlamalar",
       "users": "Foydalanuvchilar",
       "security": "Xavfsizlik",
-      "trash": "Chiqindi qutisi"
+      "trash": "Chiqindi qutisi",
+      "transfer": "Import va eksport"
     },
     "media": {
       "title": "Media",
@@ -634,6 +636,54 @@
       "skipped": "Tarjima qilinmadi: {languages}",
       "reviewHint": "Tasdiqlashdan oldin o'qib chiqing — bu boshlang'ich nuqta, tayyor matn emas.",
       "failed": "Tarjima bajarilmadi."
+    },
+    "transfer": {
+      "contentType": "Kontent turi",
+      "format": "Format",
+      "formatCsv": "CSV (jadval)",
+      "formatJson": "JSON",
+      "exportTitle": "Eksport",
+      "exportDescription": "Barcha {count} ta yozuvni hamma tillari bilan bitta faylga yuklab beradi. Jadvalda oching, tahrirlang va qaytarib yuklang.",
+      "exportButton": "Eksportni yuklab olish",
+      "templateButton": "Bo'sh shablon",
+      "templateReady": "Shablon yuklandi. Har bir yozuv uchun bitta qator to'ldiring va import qiling.",
+      "exportReady": "{count} ta yozuv {file} fayliga yuklandi.",
+      "importTitle": "Import",
+      "importDescription": "Faylda yo'q ustunlar o'zgarishsiz qoladi. id yoki mavjud slug bo'lgan qator o'sha yozuvni yangilaydi, qolganlari qoralama sifatida yaratiladi. Import hech qachon nashr holatini o'zgartirmaydi.",
+      "chooseFile": "Avval faylni tanlang.",
+      "previewButton": "O'zgarishlarni ko'rish",
+      "applyButton": "Importni qo’llash",
+      "selectedFile": "Tanlandi: {name}",
+      "imported": "Import qo’llandi — {count} ta qator.",
+      "previewTitle": "Ko'rib chiqish — hali hech narsa yozilmadi",
+      "resultTitle": "Import natijasi",
+      "summary": "{total} qator · {created} ta yaratiladi · {updated} ta yangilanadi · {failed} tasida muammo",
+      "columnLine": "Qator",
+      "columnAction": "Amal",
+      "columnRecord": "Yozuv",
+      "columnNote": "Izoh",
+      "action": {
+        "create": "Yaratish",
+        "update": "Yangilash",
+        "error": "Muammo"
+      },
+      "failed": "Nimadir xato ketdi."
     }
+  },
+  "assistant": {
+    "title": "Katalog yordamchisi",
+    "intro": "Mahsulotlar, brendlar, xizmatlar yoki tadbirlar haqida so'rang. Javoblar shu katalog asosida beriladi va manba sahifalarga havola qilinadi.",
+    "empty": "Boshlash uchun savol bering — masalan, qanday kompozitlar bor yoki qaysi brendlar taqdim etilgan.",
+    "thinking": "Katalogdan qidirilmoqda…",
+    "placeholder": "Mahsulot, brend yoki xizmat haqida so'rang…",
+    "inputLabel": "Savolingiz",
+    "send": "Yuborish",
+    "sources": "Manba sahifalar",
+    "failed": "Yordamchi hozir ishlamayapti.",
+    "noMatch": "Katalogda bunga mos narsa topilmadi. <link>Jamoaga to'g'ridan-to'g'ri yozing</link> — sizga odam javob beradi.",
+    "disclaimer": "Javoblar katalog matnlari asosida yaratiladi va to'liq bo'lmasligi yoki eskirgan bo'lishi mumkin. Narx, mavjudlik, yetkazib berish va har qanday klinik savol bo'yicha <link>jamoaga murojaat qiling</link>.",
+    "suggestion1": "Qanday kompozit materiallar bor?",
+    "suggestion2": "Qaysi brendlarni taqdim etasiz?",
+    "suggestion3": "Uskunalar uchun qanday xizmatlar bor?"
   }
 }

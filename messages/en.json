@@ -34,7 +34,8 @@
     "news": "News",
     "resources": "Resources",
     "certificates": "Trust centre",
-    "contact": "Contact"
+    "contact": "Contact",
+    "assistant": "Assistant"
   },
   "errors": {
     "title": "Something went wrong",
@@ -297,7 +298,8 @@
       "settings": "Settings",
       "users": "Users",
       "security": "Security",
-      "trash": "Trash"
+      "trash": "Trash",
+      "transfer": "Import & export"
     },
     "media": {
       "title": "Media",
@@ -634,6 +636,54 @@
       "skipped": "Could not translate: {languages}",
       "reviewHint": "Read them through before approving — they are a starting point, not final copy.",
       "failed": "Translation failed."
+    },
+    "transfer": {
+      "contentType": "Content type",
+      "format": "Format",
+      "formatCsv": "CSV (spreadsheet)",
+      "formatJson": "JSON",
+      "exportTitle": "Export",
+      "exportDescription": "Downloads all {count} records with every language in one file. Open it in a spreadsheet, edit, and bring it back.",
+      "exportButton": "Download export",
+      "templateButton": "Empty template",
+      "templateReady": "Template downloaded. Fill in a row per record and import it.",
+      "exportReady": "{count} records downloaded as {file}.",
+      "importTitle": "Import",
+      "importDescription": "Columns the file leaves out are left as they are. A row with an id or a known slug updates that record; anything else is created as a draft. Publishing is never changed by an import.",
+      "chooseFile": "Choose a file first.",
+      "previewButton": "Preview changes",
+      "applyButton": "Apply import",
+      "selectedFile": "Selected: {name}",
+      "imported": "Import applied — {count} rows.",
+      "previewTitle": "Preview — nothing has been written yet",
+      "resultTitle": "Import result",
+      "summary": "{total} rows · {created} to create · {updated} to update · {failed} with problems",
+      "columnLine": "Row",
+      "columnAction": "Action",
+      "columnRecord": "Record",
+      "columnNote": "Note",
+      "action": {
+        "create": "Create",
+        "update": "Update",
+        "error": "Problem"
+      },
+      "failed": "Something went wrong."
     }
+  },
+  "assistant": {
+    "title": "Catalogue assistant",
+    "intro": "Ask about products, brands, services or events. Answers come from this catalogue, with links to the pages they came from.",
+    "empty": "Ask a question to begin — for example, which composites are stocked, or which brands are represented.",
+    "thinking": "Looking through the catalogue…",
+    "placeholder": "Ask about a product, brand or service…",
+    "inputLabel": "Your question",
+    "send": "Send",
+    "sources": "From these pages",
+    "failed": "The assistant is unavailable right now.",
+    "noMatch": "Nothing in the catalogue matched that. <link>Ask the team directly</link> and a person will answer.",
+    "disclaimer": "Answers are generated from catalogue text and can be incomplete or out of date. For prices, stock, delivery or anything clinical, <link>contact the team</link>.",
+    "suggestion1": "Which composite materials do you stock?",
+    "suggestion2": "Which brands do you represent?",
+    "suggestion3": "What services do you offer for equipment?"
   }
 }
