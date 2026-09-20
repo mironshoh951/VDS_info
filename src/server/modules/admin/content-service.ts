@@ -4,6 +4,7 @@ import { authorize } from '@/server/auth/guard'
 import { actorId, actorLabel, actorRole, type Actor } from '@/server/auth/actor'
 import { recordAudit, type AuditAction } from '@/server/security/audit'
 import { invalidateNavigation } from '@/server/modules/navigation/service'
+import { enqueueTranslation } from '@/server/jobs/queues'
 import { notFound, conflict, AppError } from '@/lib/errors'
 import { logger } from '@/lib/logger'
 import { RESOURCES, type ResourceDefinition, type ResourceKey } from './resources'
@@ -355,7 +356,7 @@ export async function permanentlyDelete(
 // ---------------------------------------------------------------------------
 
 export type BulkOperation =
-  'publish' | 'unpublish' | 'archive' | 'feature' | 'unfeature' | 'delete'
+  'publish' | 'unpublish' | 'archive' | 'feature' | 'unfeature' | 'delete' | 'translate'
 
 export interface BulkResult {
   requested: number
@@ -399,6 +400,24 @@ export async function bulkOperation(
           break
         case 'delete':
           await softDelete(resourceKey, id, context)
+          break
+        case 'translate':
+          // Checked here, against the person. The worker runs as the system
+          // actor, which holds every capability — so if this were left to the
+          // job, `bulk.run` alone would be enough to spend the AI budget.
+          await authorize(context.actor, 'translation.ai.run', {
+            entityType: definition.entityType,
+            entityId: id,
+          })
+          // Queued, not run. Translating a hundred records means a hundred AI
+          // calls; doing that inside the request would hold the connection
+          // open for minutes and be cut off long before it finished.
+          await enqueueTranslation({
+            resourceKey,
+            id,
+            requestedBy: actorId(context.actor),
+            requestedByLabel: actorLabel(context.actor),
+          })
           break
       }
       result.succeeded += 1

@@ -11,7 +11,7 @@
     "build": "next build",
     "start": "next start",
     "worker": "tsx src/server/jobs/worker.ts",
-    "worker:build": "esbuild src/server/jobs/worker.ts --bundle --platform=node --target=node22 --format=cjs --external:@prisma/client --external:.prisma --external:sharp --external:@node-rs/argon2 --outfile=dist-worker/worker.js",
+    "worker:build": "esbuild src/server/jobs/worker.ts --bundle --platform=node --target=node22 --format=esm --packages=external --alias:next/cache=./src/server/jobs/next-cache-stub.ts --outfile=dist-worker/worker.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings=0",
     "format": "prettier --write .",

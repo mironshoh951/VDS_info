@@ -188,6 +188,23 @@ export function ResourceTable({
             >
               Archive
             </Button>
+            {/*
+              Queued rather than immediate, and labelled so: the button returns
+              at once and the drafts appear as the worker gets to them. A
+              spinner that sat here for four minutes would be a worse lie.
+            */}
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={pending}
+              onClick={() =>
+                run(() =>
+                  bulkAction({ resource, ids: [...selected], operation: 'translate' }),
+                )
+              }
+            >
+              Queue translation
+            </Button>
             {canDelete && (
               <Button
                 size="sm"

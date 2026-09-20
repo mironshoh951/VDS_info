@@ -148,6 +148,12 @@ all database-driven.
 - AI translation: drafts the other three languages from the Uzbek source,
   marked `AI_DRAFT` so nothing reaches the public site before a person approves
   it. Every call is priced into a spend ledger with a monthly cap.
+- A background worker: the same image with a different entrypoint, consuming a
+  BullMQ queue. Bulk translation is queued rather than run inside the request,
+  because a hundred records is a hundred AI calls and no proxy holds a
+  connection open that long. Every job is also a `job_runs` row, so "did that
+  batch ever run" is answerable without opening Redis, and the process stops on
+  SIGTERM rather than waiting for SIGKILL.
 - Import and export: any content type leaves as a CSV (all four languages, one
   row per record) or JSON, and comes back through the same `saveRecord` the
   editor uses — so a spreadsheet obeys the editor's rules about slugs, source

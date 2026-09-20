@@ -101,7 +101,7 @@ services:
       dockerfile: Dockerfile
       target: runner
     restart: unless-stopped
-    command: ['node', 'dist-worker/worker.js']
+    command: ['node', 'dist-worker/worker.mjs']
     env_file: .env
     environment:
       DATABASE_URL: postgresql://vds:vds_dev_password@postgres:5432/vds?schema=public

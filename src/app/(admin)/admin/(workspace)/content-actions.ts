@@ -197,6 +197,7 @@ export async function bulkAction(input: {
         'feature',
         'unfeature',
         'delete',
+        'translate',
       ]),
     })
     .safeParse(input)
